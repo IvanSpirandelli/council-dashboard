@@ -19,7 +19,7 @@ council's decision-making, not a replacement for any of its logic.
 `runs/<session>/round_NNN/`:
 
 ```
-decision.json          DecisionRecord (candidates, promoted, lineage, results)
+decision.json          DecisionRecord (candidates, promoted, results)
 runs.jsonl             RunResult per executed spec (metrics, artifacts, fingerprint)
 llm_calls.jsonl        One LLMCall per agent invocation
 llm/                   *.prompt.txt + *.response.json for each call

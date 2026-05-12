@@ -374,7 +374,6 @@ class _CandidateCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final feats = (c['feature_ids'] as List?)?.cast<String>() ?? const [];
     final flags = (c['risk_flags'] as List?)?.cast<String>() ?? const [];
-    final lineage = c['lineage'] as Map<String, dynamic>?;
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 4),
       shape: RoundedRectangleBorder(
@@ -407,11 +406,6 @@ class _CandidateCard extends StatelessWidget {
               SelectableText('id: ${c['experiment_id']}',
                   style: Theme.of(context).textTheme.bodySmall),
             ]),
-            const SizedBox(height: 6),
-            if (lineage != null)
-              Text(
-                  'lineage: ${lineage['anchor']} (${lineage['tier']}) — axes: ${(lineage['claimed_axes'] as List?)?.join(', ')}',
-                  style: Theme.of(context).textTheme.bodySmall),
             const SizedBox(height: 6),
             Text('model: ${c['model_family']} · hidden: ${c['hidden']}',
                 style: Theme.of(context).textTheme.bodySmall),

@@ -356,7 +356,6 @@ class _ContextEditor extends StatelessWidget {
           for (final k in const [
             'resource',
             'history',
-            'anchors',
             'extra_context',
             'task',
             'raw',
@@ -505,7 +504,7 @@ class _BlockBody extends StatelessWidget {
         },
       ));
     }
-    // anchors / extra_context: header-only — already covered.
+    // extra_context: header-only — already covered.
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,

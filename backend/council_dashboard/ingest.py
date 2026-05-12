@@ -212,7 +212,6 @@ def _candidate_summary(c: dict[str, Any]) -> dict[str, Any]:
         "proposer": c.get("proposer"),
         "promoted": bool(c.get("promoted")),
         "risk_flags": c.get("risk_flags", []),
-        "lineage": c.get("lineage"),
         "feature_ids": feats,
         "model_family": (spec.get("model") or {}).get("family"),
         "hidden": (spec.get("model") or {}).get("hidden"),
