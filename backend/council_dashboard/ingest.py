@@ -307,33 +307,32 @@ def topology_overlay(
     round_or_session: dict[str, Any],
     valid_ids: set[str],
 ) -> dict[str, dict[str, Any]]:
-    active_agent = (round_or_session.get("active_call") or {}).get("agent")
-    """Map node_id → {calls, approx_tokens, wall_seconds} for the frontend.
+    """Map node_id → {calls, approx_tokens, wall_seconds, active} for the frontend.
 
     ``valid_ids`` filters out unknown agent names (e.g., a renamed seat)
     so the overlay only attaches data the topology can render.
+
+    For a session, the overlay reflects the *current* round (or the
+    latest one if the launcher is idle) — not a sum across history. The
+    earlier summing behavior made every LLM node look "done" forever
+    after the first round, because total calls only ever go up.
     """
+    active_agent = (round_or_session.get("active_call") or {}).get("agent")
     per_agent_iter: Iterable[dict[str, Any]]
     if "per_agent" in round_or_session:  # round summary
         per_agent_iter = round_or_session["per_agent"]
-    else:  # session summary — sum over rounds
-        sums: dict[str, dict[str, Any]] = {}
-        for r in round_or_session.get("rounds", []):
-            for slot in r.get("per_agent", []):
-                a = slot["agent"]
-                acc = sums.setdefault(
-                    a,
-                    {
-                        "agent": a,
-                        "calls": 0,
-                        "approx_tokens": 0,
-                        "wall_seconds": 0.0,
-                    },
-                )
-                acc["calls"] += slot["calls"]
-                acc["approx_tokens"] += slot["approx_tokens"]
-                acc["wall_seconds"] += slot["wall_seconds"]
-        per_agent_iter = sums.values()
+    else:  # session summary — pick a single round to display
+        rounds = round_or_session.get("rounds", []) or []
+        current_id = round_or_session.get("current_round_id")
+        chosen: dict[str, Any] | None = None
+        if current_id:
+            for r in rounds:
+                if r.get("round_id") == current_id:
+                    chosen = r
+                    break
+        if chosen is None and rounds:
+            chosen = rounds[-1]  # fallback: latest completed round
+        per_agent_iter = (chosen or {}).get("per_agent", []) if chosen else []
     overlay: dict[str, dict[str, Any]] = {}
     for slot in per_agent_iter:
         if slot["agent"] not in valid_ids:
