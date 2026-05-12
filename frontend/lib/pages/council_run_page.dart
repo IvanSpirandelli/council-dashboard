@@ -115,8 +115,9 @@ class _Body extends StatelessWidget {
     final stopPending = summary['stop_pending'] == true;
     final currentRoundId = summary['current_round_id'] as String?;
     final knownIds = rounds.map((r) => r['round_id'] as String).toSet();
+    // Newest first: the in-flight pending round (if any) sits at the very
+    // top, followed by completed rounds in reverse-chronological order.
     final displayRounds = <Map<String, dynamic>>[
-      ...rounds,
       if (running &&
           currentRoundId != null &&
           !knownIds.contains(currentRoundId))
@@ -129,6 +130,7 @@ class _Body extends StatelessWidget {
           'llm_call_count': 0,
           'approx_tokens': 0,
         },
+      ...rounds.reversed,
     ];
 
     return Row(

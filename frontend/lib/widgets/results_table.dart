@@ -37,6 +37,9 @@ class ResultsTable extends StatelessWidget {
 
   final List<ResultRow> rows;
   final String idLabel;
+  // Width cap on the features column. Chips inside Wrap to additional
+  // lines when they exceed this; the DataTable row grows taller to fit
+  // them (see ``dataRowMaxHeight`` below).
   final double featureMaxWidth;
   final String emptyMessage;
 
@@ -50,6 +53,11 @@ class ResultsTable extends StatelessWidget {
       child: SingleChildScrollView(
         child: DataTable(
           columnSpacing: 16,
+          // Default ``dataRowMaxHeight`` clips wrapped feature chips so
+          // they overlap with the next row. Lift the cap so a cell with
+          // many features grows the whole row's height to fit.
+          dataRowMinHeight: kMinInteractiveDimension,
+          dataRowMaxHeight: double.infinity,
           columns: [
             DataColumn(label: Text(idLabel)),
             const DataColumn(label: Text('CL2 r')),
@@ -67,9 +75,12 @@ class ResultsTable extends StatelessWidget {
                 DataCell(_metric(r.bdb)),
                 DataCell(_metric(r.egfr)),
                 DataCell(_metric(r.mpro)),
-                DataCell(FeatureChipList(
-                  featureIds: r.featureIds,
-                  maxWidth: featureMaxWidth,
+                DataCell(Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  child: FeatureChipList(
+                    featureIds: r.featureIds,
+                    maxWidth: featureMaxWidth,
+                  ),
                 )),
                 DataCell(Text(r.architecture)),
               ]),
