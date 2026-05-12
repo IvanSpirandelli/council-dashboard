@@ -126,8 +126,13 @@ class _AgentGraphState extends State<AgentGraph> {
       final pairN = pairCount[key]!;
       // Single edge: small lift off the line. Bidirectional: opposite
       // sides so the two labels can't overlap.
+      // 14px lifted a single label nicely off a line, but with a
+      // bidirectional pair the two chip boxes (~24px tall each) still
+      // overlapped at ±14 centers. 24px puts ~48px between centers,
+      // leaving a comfortable gap.
       final sign = pairN > 1 ? (idx == 0 ? 1.0 : -1.0) : 1.0;
-      final pos = mid + perp * 14 * sign;
+      final offset = pairN > 1 ? 24.0 : 14.0;
+      final pos = mid + perp * offset * sign;
 
       out.add(_LabelLayout(text: e['label'] as String, pos: pos));
     }
