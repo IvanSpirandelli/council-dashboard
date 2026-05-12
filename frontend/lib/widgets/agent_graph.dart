@@ -66,6 +66,8 @@ class _AgentGraphState extends State<AgentGraph> {
           n['id'] as String: _sizeFor(n['kind'] == 'llm'),
       };
 
+      final labels = _layoutEdgeLabels(sizes);
+
       return Container(
         color: _bgColor,
         child: Stack(
@@ -79,11 +81,70 @@ class _AgentGraphState extends State<AgentGraph> {
                 ),
               ),
             ),
+            for (final l in labels) _EdgeLabelChip(label: l),
             for (final n in widget.nodes) _buildTile(n, maxTokens, size),
           ],
         ),
       );
     });
+  }
+
+  /// Compute the midpoint + perpendicular offset for every edge label.
+  /// Edges between the same node pair (regardless of direction) get
+  /// offset on opposite sides of the line so the labels don't stack —
+  /// without this the decider↔critic round-trip rendered both labels
+  /// on top of each other at the same midpoint.
+  List<_LabelLayout> _layoutEdgeLabels(Map<String, Size> sizes) {
+    final pairCount = <String, int>{};
+    for (final e in widget.edges) {
+      final key = _pairKey(e['src'] as String, e['dst'] as String);
+      pairCount[key] = (pairCount[key] ?? 0) + 1;
+    }
+    final pairSeen = <String, int>{};
+    final out = <_LabelLayout>[];
+    for (final e in widget.edges) {
+      final src = e['src'] as String;
+      final dst = e['dst'] as String;
+      final a = _positions[src];
+      final b = _positions[dst];
+      if (a == null || b == null) continue;
+      final aSize = sizes[src] ?? const Size(_tileW, _tileH);
+      final bSize = sizes[dst] ?? const Size(_tileW, _tileH);
+
+      final dir = b - a;
+      final len = dir.distance;
+      if (len <= 0) continue;
+      final unit = dir / len;
+      final aClip = a + unit * _clipDist(unit, aSize);
+      final bClip = b - unit * _clipDist(unit, bSize);
+      final mid = (aClip + bClip) / 2;
+      final perp = Offset(-unit.dy, unit.dx);
+
+      final key = _pairKey(src, dst);
+      final idx = pairSeen[key] ?? 0;
+      pairSeen[key] = idx + 1;
+      final pairN = pairCount[key]!;
+      // Single edge: small lift off the line. Bidirectional: opposite
+      // sides so the two labels can't overlap.
+      final sign = pairN > 1 ? (idx == 0 ? 1.0 : -1.0) : 1.0;
+      final pos = mid + perp * 14 * sign;
+
+      out.add(_LabelLayout(text: e['label'] as String, pos: pos));
+    }
+    return out;
+  }
+
+  String _pairKey(String a, String b) =>
+      a.compareTo(b) <= 0 ? '$a|$b' : '$b|$a';
+
+  double _clipDist(Offset u, Size tile) {
+    final ax = u.dx.abs();
+    final ay = u.dy.abs();
+    final hw = tile.width / 2;
+    final hh = tile.height / 2;
+    final tx = ax > 1e-9 ? hw / ax : double.infinity;
+    final ty = ay > 1e-9 ? hh / ay : double.infinity;
+    return math.min(tx, ty);
   }
 
   Widget _buildTile(Map<String, dynamic> n, double maxTokens, Size size) {
@@ -274,10 +335,9 @@ class _EdgePainter extends CustomPainter {
       ..lineTo(right.dx, right.dy)
       ..close();
     canvas.drawPath(path, Paint()..color = _edgeColor);
-
-    final mid = (aClip + bClip) / 2;
-    _text(canvas, mid + const Offset(6, 4), label,
-        const TextStyle(color: Colors.white70, fontSize: 11));
+    // Labels are drawn as widgets in the Stack — see _EdgeLabelChip —
+    // so they sit above the edge canvas with a real white background
+    // and aren't covered by line / arrowhead pixels.
   }
 
   double _clipDist(Offset u, Size tile) {
@@ -290,16 +350,48 @@ class _EdgePainter extends CustomPainter {
     return math.min(tx, ty);
   }
 
-  void _text(Canvas canvas, Offset p, String s, TextStyle style) {
-    final tp = TextPainter(
-      text: TextSpan(text: s, style: style),
-      textDirection: TextDirection.ltr,
-      maxLines: 1,
-      ellipsis: '…',
-    )..layout(maxWidth: 200);
-    tp.paint(canvas, p);
-  }
-
   @override
   bool shouldRepaint(_EdgePainter old) => true;
+}
+
+class _LabelLayout {
+  const _LabelLayout({required this.text, required this.pos});
+  final String text;
+  final Offset pos;
+}
+
+class _EdgeLabelChip extends StatelessWidget {
+  const _EdgeLabelChip({required this.label});
+  final _LabelLayout label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Positioned(
+      left: label.pos.dx,
+      top: label.pos.dy,
+      child: FractionalTranslation(
+        translation: const Offset(-0.5, -0.5),
+        child: IgnorePointer(
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              border: Border.all(color: const Color(0xFFB0B0B0), width: 1),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text(
+              label.text,
+              style: const TextStyle(
+                color: Colors.black,
+                fontSize: 11,
+                fontWeight: FontWeight.w500,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
