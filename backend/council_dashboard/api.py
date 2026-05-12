@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from council_dashboard import councils as councils_mod
-from council_dashboard import ingest, performance, supervisor
+from council_dashboard import ingest, node_sources, performance, supervisor
 from council_dashboard.config import Settings
 
 
@@ -230,6 +230,23 @@ def council_round(name: str, round_id: str) -> dict[str, Any]:
         detail["summary"], _topology_valid_ids(name)
     )
     return detail
+
+
+@app.get("/councils/{name}/nodes/{node_id}/source")
+def council_node_source(name: str, node_id: str) -> dict[str, Any]:
+    """Source views for a code node (validator/executor).
+
+    Returns ``{"node_id", "sources": [{label, path, body}]}``. Empty
+    ``sources`` for LLM nodes or unknown ids — the frontend treats that
+    as "this node has no Python to show".
+    """
+    del name  # source is per-node, not per-council, today.
+    if not node_sources.has_source(node_id):
+        return {"node_id": node_id, "sources": []}
+    return {
+        "node_id": node_id,
+        "sources": node_sources.read_sources(settings.ml_trainer_repo, node_id),
+    }
 
 
 @app.get("/councils/{name}/rounds/{round_id}/llm/{filename}")

@@ -5,7 +5,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/providers.dart';
-import '../widgets/agent_graph.dart';
 import '../widgets/error_view.dart';
 
 class RoundPage extends ConsumerStatefulWidget {
@@ -67,43 +66,24 @@ class _RoundPageState extends ConsumerState<RoundPage> {
               .cast<Map<String, dynamic>>();
           return LayoutBuilder(builder: (ctx, c) {
             final wide = c.maxWidth > 1100;
-            final graphPanel = topology.when(
+            final nodesPanel = topology.when(
               loading: () => const LoadingView(),
               error: (e, _) => ErrorView(e),
-              data: (t) => Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                    child: Row(
-                      children: [
-                        Text('Agent topology',
-                            style: Theme.of(context).textTheme.titleMedium),
-                        const SizedBox(width: 12),
-                        if (_focusedAgent != null)
-                          Chip(
-                            label: Text(_focusedAgent!),
-                            onDeleted: () =>
-                                setState(() => _focusedAgent = null),
-                          ),
-                      ],
-                    ),
-                  ),
-                  Expanded(
-                    child: AgentGraph(
-                      nodes: (t['nodes'] as List).cast<Map<String, dynamic>>(),
-                      edges: (t['edges'] as List).cast<Map<String, dynamic>>(),
-                      overlay: overlay,
-                      onAgentTap: (id) => setState(() => _focusedAgent = id),
-                    ),
-                  ),
-                ],
+              data: (t) => _NodeList(
+                nodes: (t['nodes'] as List).cast<Map<String, dynamic>>(),
+                overlay: overlay,
+                focusedAgent: _focusedAgent,
+                onTap: (id) => setState(
+                    () => _focusedAgent = _focusedAgent == id ? null : id),
               ),
             );
+            final focusedKind = _focusedKind(topology.value);
             final ioPanel = _IOPanel(
               councilName: widget.councilName,
               roundId: widget.roundId,
               calls: calls,
               focusedAgent: _focusedAgent,
+              focusedKind: focusedKind,
               decision: data['decision'] as Map<String, dynamic>?,
               runs: ((data['runs'] as List?) ?? []).cast<Map<String, dynamic>>(),
               summary: data['summary'] as Map<String, dynamic>,
@@ -112,12 +92,12 @@ class _RoundPageState extends ConsumerState<RoundPage> {
               return Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
+                  SizedBox(
+                    width: 280,
+                    child: Card(
+                        margin: const EdgeInsets.all(12), child: nodesPanel),
+                  ),
                   Expanded(
-                      flex: 5,
-                      child: Card(
-                          margin: const EdgeInsets.all(12), child: graphPanel)),
-                  Expanded(
-                      flex: 6,
                       child: Card(
                           margin: const EdgeInsets.fromLTRB(0, 12, 12, 12),
                           child: ioPanel)),
@@ -129,7 +109,7 @@ class _RoundPageState extends ConsumerState<RoundPage> {
                 SizedBox(
                     height: 380,
                     child: Card(
-                        margin: const EdgeInsets.all(12), child: graphPanel)),
+                        margin: const EdgeInsets.all(12), child: nodesPanel)),
                 Card(
                     margin:
                         const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -141,6 +121,154 @@ class _RoundPageState extends ConsumerState<RoundPage> {
       ),
     );
   }
+
+  String? _focusedKind(Map<String, dynamic>? topo) {
+    if (_focusedAgent == null || topo == null) return null;
+    final nodes = (topo['nodes'] as List).cast<Map<String, dynamic>>();
+    for (final n in nodes) {
+      if (n['id'] == _focusedAgent) return n['kind'] as String?;
+    }
+    return null;
+  }
+}
+
+/// Vertical column of clickable node tiles, replacing the old graph view.
+/// Click toggles focus on a node; the IO panel then filters / switches
+/// content (LLM Calls for `llm`, Code for `code`).
+class _NodeList extends StatelessWidget {
+  const _NodeList({
+    required this.nodes,
+    required this.overlay,
+    required this.focusedAgent,
+    required this.onTap,
+  });
+
+  final List<Map<String, dynamic>> nodes;
+  final Map<String, Map<String, dynamic>> overlay;
+  final String? focusedAgent;
+  final void Function(String id) onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Text('Nodes',
+              style: Theme.of(context).textTheme.titleMedium),
+        ),
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 0, 16, 4),
+          child: Text('Tap to focus. Tap again to clear.',
+              style: TextStyle(fontSize: 11)),
+        ),
+        Expanded(
+          child: ListView.separated(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            itemCount: nodes.length,
+            separatorBuilder: (_, _) => const SizedBox(height: 2),
+            itemBuilder: (ctx, i) {
+              final n = nodes[i];
+              final id = n['id'] as String;
+              final label = (n['label'] as String?) ?? id;
+              final kind = (n['kind'] as String?) ?? 'llm';
+              final ov = overlay[id];
+              return _NodeTile(
+                id: id,
+                label: label,
+                kind: kind,
+                overlay: ov,
+                selected: id == focusedAgent,
+                onTap: () => onTap(id),
+              );
+            },
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _NodeTile extends StatelessWidget {
+  const _NodeTile({
+    required this.id,
+    required this.label,
+    required this.kind,
+    required this.overlay,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final String id;
+  final String label;
+  final String kind;
+  final Map<String, dynamic>? overlay;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final calls = (overlay?['calls'] as num?) ?? 0;
+    final tokens = (overlay?['approx_tokens'] as num?) ?? 0;
+    final wall = (overlay?['wall_seconds'] as num?) ?? 0;
+    final active = (overlay?['active'] as bool?) ?? false;
+    final icon = kind == 'code' ? Icons.code : Icons.smart_toy_outlined;
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: selected ? scheme.primaryContainer : Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            children: [
+              Icon(icon,
+                  size: 18,
+                  color: active
+                      ? Colors.blue
+                      : (selected
+                          ? scheme.onPrimaryContainer
+                          : scheme.onSurfaceVariant)),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(label,
+                        style: Theme.of(context).textTheme.bodyMedium),
+                    if (kind == 'llm' && calls > 0)
+                      Text(
+                        '${calls.toInt()} calls · ≈${_kfmt(tokens)} tok · ${wall.toStringAsFixed(0)}s',
+                        style: Theme.of(context).textTheme.bodySmall,
+                      )
+                    else if (kind == 'llm')
+                      Text('idle',
+                          style: Theme.of(context).textTheme.bodySmall)
+                    else
+                      Text('code',
+                          style: Theme.of(context).textTheme.bodySmall),
+                  ],
+                ),
+              ),
+              if (active)
+                const SizedBox(
+                  width: 12,
+                  height: 12,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _kfmt(num v) {
+    if (v >= 1000000) return '${(v / 1000000).toStringAsFixed(1)}M';
+    if (v >= 1000) return '${(v / 1000).round()}k';
+    return v.toString();
+  }
 }
 
 class _IOPanel extends ConsumerWidget {
@@ -149,6 +277,7 @@ class _IOPanel extends ConsumerWidget {
     required this.roundId,
     required this.calls,
     required this.focusedAgent,
+    required this.focusedKind,
     required this.decision,
     required this.runs,
     required this.summary,
@@ -158,32 +287,44 @@ class _IOPanel extends ConsumerWidget {
   final String roundId;
   final List<Map<String, dynamic>> calls;
   final String? focusedAgent;
+  final String? focusedKind;
   final Map<String, dynamic>? decision;
   final List<Map<String, dynamic>> runs;
   final Map<String, dynamic> summary;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final filtered = focusedAgent == null
+    // When a code node is focused, swap the LLM Calls tab for a Code tab
+    // backed by ml-trainer source. Other tabs are council-wide and stay.
+    final showCode = focusedAgent != null && focusedKind == 'code';
+    final filteredCalls = focusedAgent == null
         ? calls
-        : calls.where((c) => c['agent_id'] == focusedAgent).toList();
+        : calls.where((c) => c['agent'] == focusedAgent).toList();
+    final firstTab = showCode
+        ? Tab(text: 'Code · $focusedAgent')
+        : Tab(text: focusedAgent == null
+            ? 'LLM calls'
+            : 'LLM calls · $focusedAgent');
     return DefaultTabController(
       length: 4,
       child: Column(
         children: [
-          const TabBar(tabs: [
-            Tab(text: 'LLM calls'),
-            Tab(text: 'Candidates'),
-            Tab(text: 'Results'),
-            Tab(text: 'Raw decision'),
+          TabBar(tabs: [
+            firstTab,
+            const Tab(text: 'Candidates'),
+            const Tab(text: 'Results'),
+            const Tab(text: 'Raw decision'),
           ]),
           Expanded(
             child: TabBarView(children: [
-              _LLMCallsTab(
-                councilName: councilName,
-                roundId: roundId,
-                calls: filtered,
-              ),
+              showCode
+                  ? _CodeTab(
+                      councilName: councilName, nodeId: focusedAgent!)
+                  : _LLMCallsTab(
+                      councilName: councilName,
+                      roundId: roundId,
+                      calls: filteredCalls,
+                    ),
               _CandidatesTab(
                   candidates: ((summary['candidates'] as List?) ?? [])
                       .cast<Map<String, dynamic>>(),
@@ -222,6 +363,10 @@ class _LLMCallsTabState extends ConsumerState<_LLMCallsTab> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.calls.isEmpty) {
+      return const Center(
+          child: Text('No LLM calls for the selected node yet.'));
+    }
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -229,7 +374,7 @@ class _LLMCallsTabState extends ConsumerState<_LLMCallsTab> {
           width: 280,
           child: ListView.separated(
             itemCount: widget.calls.length,
-            separatorBuilder: (_, __) => const Divider(height: 1),
+            separatorBuilder: (_, _) => const Divider(height: 1),
             itemBuilder: (ctx, i) {
               final c = widget.calls[i];
               final selected = c == _selected;
@@ -333,6 +478,48 @@ class _LLMCallsTabState extends ConsumerState<_LLMCallsTab> {
     if (v >= 1000000) return '${(v / 1000000).toStringAsFixed(1)}M';
     if (v >= 1000) return '${(v / 1000).round()}k';
     return v.toString();
+  }
+}
+
+class _CodeTab extends ConsumerWidget {
+  const _CodeTab({required this.councilName, required this.nodeId});
+  final String councilName;
+  final String nodeId;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final src = ref.watch(
+        councilNodeSourceProvider(CouncilNodeKey(councilName, nodeId)));
+    return src.when(
+      loading: () => const LoadingView(label: 'Loading source…'),
+      error: (e, _) => ErrorView(e),
+      data: (data) {
+        final sources = ((data['sources'] as List?) ?? [])
+            .cast<Map<String, dynamic>>();
+        if (sources.isEmpty) {
+          return const Center(
+              child: Text('No code mapped for this node yet.'));
+        }
+        return DefaultTabController(
+          length: sources.length,
+          child: Column(
+            children: [
+              TabBar(
+                isScrollable: true,
+                tabs: [for (final s in sources) Tab(text: s['label'] as String)],
+              ),
+              Expanded(
+                child: TabBarView(
+                  children: [
+                    for (final s in sources) _MonoText(s['body'] as String),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 }
 

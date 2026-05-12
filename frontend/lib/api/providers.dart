@@ -56,6 +56,28 @@ final councilRoundProvider = FutureProvider.family<Map<String, dynamic>,
       .councilRound(key.councilName, key.roundId);
 });
 
+class CouncilNodeKey {
+  const CouncilNodeKey(this.councilName, this.nodeId);
+  final String councilName;
+  final String nodeId;
+
+  @override
+  bool operator ==(Object other) =>
+      other is CouncilNodeKey &&
+      other.councilName == councilName &&
+      other.nodeId == nodeId;
+
+  @override
+  int get hashCode => Object.hash(councilName, nodeId);
+}
+
+final councilNodeSourceProvider = FutureProvider.family<Map<String, dynamic>,
+    CouncilNodeKey>((ref, key) async {
+  return ref
+      .watch(dashboardApiProvider)
+      .councilNodeSource(key.councilName, key.nodeId);
+});
+
 class PerfQuery {
   const PerfQuery({
     required this.councilName,

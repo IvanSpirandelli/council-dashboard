@@ -128,6 +128,10 @@ class DashboardApi {
   Future<Map<String, dynamic>> councilTopology(String name) =>
       _getJson(_u('/topology', {'council': name}));
 
+  Future<Map<String, dynamic>> councilNodeSource(
+          String name, String nodeId) =>
+      _getJson(_u('/councils/$name/nodes/$nodeId/source'));
+
   Future<Map<String, dynamic>> councilPerformance(
     String name, {
     String sort = 'test_pearson_r_mean',
