@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -46,6 +48,9 @@ const String _factory = 'ml_trainer.council.factory:build';
 class _LaunchConfigPanelState extends ConsumerState<LaunchConfigPanel> {
   final _maxRoundsCtrl = TextEditingController(text: '30');
   final _maxCriticTurnsCtrl = TextEditingController(text: '2');
+  // Thread-pool size used by MultiSeedExecutor to fan out MLP seeds.
+  // Passes through to factory.build via --factory-kwargs.
+  final _seedWorkersCtrl = TextEditingController(text: '5');
   bool _costCapActive = false;
 
   Map<String, dynamic>? _manifest;
@@ -77,6 +82,7 @@ class _LaunchConfigPanelState extends ConsumerState<LaunchConfigPanel> {
   void dispose() {
     _maxRoundsCtrl.dispose();
     _maxCriticTurnsCtrl.dispose();
+    _seedWorkersCtrl.dispose();
     for (final c in _countCtrls.values) {
       c.dispose();
     }
@@ -147,6 +153,15 @@ class _LaunchConfigPanelState extends ConsumerState<LaunchConfigPanel> {
           _maxRoundsCtrl.text = cmd[i + 1];
         case '--max-critic-turns':
           _maxCriticTurnsCtrl.text = cmd[i + 1];
+        case '--factory-kwargs':
+          try {
+            final kw = jsonDecode(cmd[i + 1]);
+            if (kw is Map && kw['seed_workers'] is int) {
+              _seedWorkersCtrl.text = kw['seed_workers'].toString();
+            }
+          } catch (_) {
+            // Ignore malformed JSON; field keeps its default.
+          }
       }
     }
     _costCapActive = cmd.contains('--cost-cap-active');
@@ -167,6 +182,13 @@ class _LaunchConfigPanelState extends ConsumerState<LaunchConfigPanel> {
       '--max-critic-turns',
       _maxCriticTurnsCtrl.text.trim(),
     ];
+    final seedWorkers = int.tryParse(_seedWorkersCtrl.text.trim());
+    if (seedWorkers != null && seedWorkers >= 1) {
+      cmd.addAll([
+        '--factory-kwargs',
+        jsonEncode({'seed_workers': seedWorkers}),
+      ]);
+    }
     if (_costCapActive) cmd.add('--cost-cap-active');
     return cmd;
   }
@@ -265,6 +287,9 @@ class _LaunchConfigPanelState extends ConsumerState<LaunchConfigPanel> {
                       enabled: !locked)),
             ],
           ),
+          const SizedBox(height: 8),
+          _intField(_seedWorkersCtrl, 'Parallel MLP seeds',
+              enabled: !locked),
           SwitchListTile.adaptive(
             contentPadding: EdgeInsets.zero,
             dense: true,
