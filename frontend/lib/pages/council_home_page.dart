@@ -172,7 +172,7 @@ class _PerfRows extends StatelessWidget {
               DataCell(_metric(rows[i]['mpro_pearson_r_mean'])),
               DataCell(FeatureChipList(
                 featureIds: _splitFeatureIds(rows[i]['feature_ids']),
-                maxWidth: 220,
+                maxWidth: 420,
               )),
               DataCell(Text(rows[i]['hidden']?.toString() ?? '—')),
             ]),
