@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -19,6 +20,23 @@ class RoundPage extends ConsumerStatefulWidget {
 
 class _RoundPageState extends ConsumerState<RoundPage> {
   String? _focusedAgent;
+  Timer? _pollTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (!mounted) return;
+      ref.invalidate(councilRoundProvider(
+          CouncilRoundKey(widget.councilName, widget.roundId)));
+    });
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
