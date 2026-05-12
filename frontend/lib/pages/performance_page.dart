@@ -21,7 +21,6 @@ class _PerformancePageState extends ConsumerState<PerformancePage> {
 
   static const _sortOptions = <String, String>{
     'test_pearson_r_mean': 'CL2 r',
-    'val_pearson_r_mean': 'val r',
     'bdb2020_pearson_r_mean': 'BDB r',
     'egfr_pearson_r_mean': 'EGFR r',
     'mpro_pearson_r_mean': 'MPro r',
@@ -97,7 +96,6 @@ class _PerformancePageState extends ConsumerState<PerformancePage> {
                         DataColumn(label: Text('fingerprint')),
                         DataColumn(label: Text('seeds')),
                         DataColumn(label: Text('CL2 r')),
-                        DataColumn(label: Text('val r')),
                         DataColumn(label: Text('BDB r')),
                         DataColumn(label: Text('EGFR r')),
                         DataColumn(label: Text('MPro r')),
@@ -115,7 +113,6 @@ class _PerformancePageState extends ConsumerState<PerformancePage> {
                             DataCell(Text(
                                 '${rows[i]['n_seeds_succeeded'] ?? '?'}/${rows[i]['n_seeds'] ?? '?'}')),
                             DataCell(_metric(rows[i]['test_pearson_r_mean'])),
-                            DataCell(_metric(rows[i]['val_pearson_r_mean'])),
                             DataCell(
                                 _metric(rows[i]['bdb2020_pearson_r_mean'])),
                             DataCell(_metric(rows[i]['egfr_pearson_r_mean'])),
