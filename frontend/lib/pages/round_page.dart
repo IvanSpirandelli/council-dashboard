@@ -677,14 +677,13 @@ class _ResultsTab extends StatelessWidget {
             for (final r in runs)
               DataRow(cells: [
                 DataCell(Text(r['experiment_id']?.toString() ?? '—')),
-                DataCell(SelectableText(r['fingerprint']?.toString() ?? '—')),
-                DataCell(Text(
-                    '${(r['n_seeds_succeeded'] ?? '?')}/${(r['n_seeds_total'] ?? '?')}')),
-                DataCell(_metricCell(r['test_pearson_r_mean'])),
-                DataCell(_metricCell(r['val_pearson_r_mean'])),
-                DataCell(_metricCell(r['bdb2020_pearson_r_mean'])),
-                DataCell(_metricCell(r['egfr_pearson_r_mean'])),
-                DataCell(_metricCell(r['mpro_pearson_r_mean'])),
+                DataCell(SelectableText(_fingerprint(r) ?? '—')),
+                DataCell(Text(_seeds(r))),
+                DataCell(_metricCell(_metric(r, 'test_pearson_r'))),
+                DataCell(_metricCell(_metric(r, 'val_pearson_r'))),
+                DataCell(_metricCell(_metric(r, 'bdb2020_pearson_r'))),
+                DataCell(_metricCell(_metric(r, 'egfr_pearson_r'))),
+                DataCell(_metricCell(_metric(r, 'mpro_pearson_r'))),
               ]),
           ],
         ),
@@ -692,9 +691,33 @@ class _ResultsTab extends StatelessWidget {
     );
   }
 
-  Widget _metricCell(Object? v) {
-    if (v is num) return Text(v.toStringAsFixed(4));
-    return const Text('—');
+  // Pull `<key>_mean` (MultiSeedExecutor aggregate) and fall back to the
+  // bare `<key>` so legacy single-seed runs still render.
+  num? _metric(Map<String, dynamic> r, String key) {
+    final m = (r['metrics'] as Map?)?.cast<String, dynamic>();
+    if (m == null) return null;
+    final v = m['${key}_mean'] ?? m[key];
+    return v is num ? v : null;
+  }
+
+  String? _fingerprint(Map<String, dynamic> r) {
+    final fp = (r['artifacts'] as Map?)?['fingerprint'];
+    return fp?.toString();
+  }
+
+  String _seeds(Map<String, dynamic> r) {
+    final m = (r['metrics'] as Map?)?.cast<String, dynamic>();
+    final ok = m?['n_seeds_succeeded'];
+    final total = m?['n_seeds_total'];
+    if (ok == null && total == null) return '1/1';
+    String fmt(Object? v) =>
+        v is num ? v.toInt().toString() : (v?.toString() ?? '?');
+    return '${fmt(ok)}/${fmt(total)}';
+  }
+
+  Widget _metricCell(num? v) {
+    if (v == null) return const Text('—');
+    return Text(v.toStringAsFixed(4));
   }
 }
 
