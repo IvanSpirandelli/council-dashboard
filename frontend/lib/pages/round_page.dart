@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/providers.dart';
 import '../widgets/error_view.dart';
+import '../widgets/feature_chip.dart';
 
 class RoundPage extends ConsumerStatefulWidget {
   const RoundPage({super.key, required this.councilName, required this.roundId});
@@ -615,14 +616,7 @@ class _CandidateCard extends StatelessWidget {
             Text('model: ${c['model_family']} · hidden: ${c['hidden']}',
                 style: Theme.of(context).textTheme.bodySmall),
             const SizedBox(height: 6),
-            Wrap(
-              spacing: 4,
-              runSpacing: 4,
-              children: [
-                for (final f in feats)
-                  Chip(label: Text(f), visualDensity: VisualDensity.compact)
-              ],
-            ),
+            FeatureChipList(featureIds: feats),
             if (flags.isNotEmpty) ...[
               const SizedBox(height: 6),
               Wrap(
@@ -665,23 +659,28 @@ class _ResultsTab extends StatelessWidget {
         child: DataTable(
           columns: const [
             DataColumn(label: Text('experiment_id')),
-            DataColumn(label: Text('fingerprint')),
             DataColumn(label: Text('seeds')),
             DataColumn(label: Text('CL2 r')),
             DataColumn(label: Text('BDB r')),
             DataColumn(label: Text('EGFR r')),
             DataColumn(label: Text('MPro r')),
+            DataColumn(label: Text('features')),
+            DataColumn(label: Text('architecture')),
           ],
           rows: [
             for (final r in runs)
               DataRow(cells: [
                 DataCell(Text(r['experiment_id']?.toString() ?? '—')),
-                DataCell(SelectableText(_fingerprint(r) ?? '—')),
                 DataCell(Text(_seeds(r))),
                 DataCell(_metricCell(_metric(r, 'test_pearson_r'))),
                 DataCell(_metricCell(_metric(r, 'bdb2020_pearson_r'))),
                 DataCell(_metricCell(_metric(r, 'egfr_pearson_r'))),
                 DataCell(_metricCell(_metric(r, 'mpro_pearson_r'))),
+                DataCell(FeatureChipList(
+                  featureIds: _featureIds(r),
+                  maxWidth: 320,
+                )),
+                DataCell(Text(_architecture(r))),
               ]),
           ],
         ),
@@ -698,9 +697,26 @@ class _ResultsTab extends StatelessWidget {
     return v is num ? v : null;
   }
 
-  String? _fingerprint(Map<String, dynamic> r) {
-    final fp = (r['artifacts'] as Map?)?['fingerprint'];
-    return fp?.toString();
+  List<String> _featureIds(Map<String, dynamic> r) {
+    final fset = ((r['spec'] as Map?)?['feature_set'] as List?) ?? const [];
+    return [
+      for (final f in fset)
+        if (f is Map && f['id'] is String) f['id'] as String,
+    ];
+  }
+
+  String _architecture(Map<String, dynamic> r) {
+    final model = (r['spec'] as Map?)?['model'] as Map?;
+    if (model == null) return '—';
+    final hidden = model['hidden'];
+    final dropout = model['dropout'];
+    final hiddenStr = hidden is List
+        ? '[${hidden.join(',')}]'
+        : (hidden?.toString() ?? '?');
+    if (dropout is num) {
+      return '$hiddenStr · d=${dropout.toStringAsFixed(2)}';
+    }
+    return hiddenStr;
   }
 
   String _seeds(Map<String, dynamic> r) {

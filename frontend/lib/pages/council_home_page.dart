@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import '../api/providers.dart';
 import '../widgets/error_view.dart';
+import '../widgets/feature_chip.dart';
 
 /// Per-council home: performance preview, edit-council, continue-tasks.
 ///
@@ -153,10 +154,11 @@ class _PerfRows extends StatelessWidget {
           DataColumn(label: Text('#')),
           DataColumn(label: Text('fingerprint')),
           DataColumn(label: Text('CL2 r')),
-          DataColumn(label: Text('val r')),
           DataColumn(label: Text('BDB r')),
-          DataColumn(label: Text('hidden')),
+          DataColumn(label: Text('EGFR r')),
+          DataColumn(label: Text('MPro r')),
           DataColumn(label: Text('features')),
+          DataColumn(label: Text('architecture')),
         ],
         rows: [
           for (var i = 0; i < rows.length; i++)
@@ -165,16 +167,14 @@ class _PerfRows extends StatelessWidget {
               DataCell(SelectableText(
                   rows[i]['fingerprint']?.toString() ?? '')),
               DataCell(_metric(rows[i]['test_pearson_r_mean'])),
-              DataCell(_metric(rows[i]['val_pearson_r_mean'])),
               DataCell(_metric(rows[i]['bdb2020_pearson_r_mean'])),
-              DataCell(Text(rows[i]['hidden']?.toString() ?? '—')),
-              DataCell(SizedBox(
-                width: 220,
-                child: Text(
-                  rows[i]['feature_ids']?.toString() ?? '',
-                  overflow: TextOverflow.ellipsis,
-                ),
+              DataCell(_metric(rows[i]['egfr_pearson_r_mean'])),
+              DataCell(_metric(rows[i]['mpro_pearson_r_mean'])),
+              DataCell(FeatureChipList(
+                featureIds: _splitFeatureIds(rows[i]['feature_ids']),
+                maxWidth: 220,
               )),
+              DataCell(Text(rows[i]['hidden']?.toString() ?? '—')),
             ]),
         ],
       ),
@@ -184,6 +184,16 @@ class _PerfRows extends StatelessWidget {
   Widget _metric(Object? v) {
     if (v is num) return Text(v.toStringAsFixed(4));
     return const Text('—');
+  }
+
+  // performance.py serializes feature_ids as a comma-joined string, not
+  // a list — split here so FeatureChipList can render pastel pills.
+  List<String> _splitFeatureIds(Object? v) {
+    if (v is List) return [for (final f in v) f.toString()];
+    if (v is String && v.isNotEmpty) {
+      return [for (final f in v.split(',')) if (f.isNotEmpty) f];
+    }
+    return const [];
   }
 }
 

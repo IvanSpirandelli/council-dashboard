@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/providers.dart';
 import '../widgets/error_view.dart';
+import '../widgets/feature_chip.dart';
 
 /// Full corpus-derived performance table for one council.
 class PerformancePage extends ConsumerStatefulWidget {
@@ -124,12 +125,10 @@ class _PerformancePageState extends ConsumerState<PerformancePage> {
                             DataCell(Text(rows[i]['lr']?.toString() ?? '—')),
                             DataCell(
                                 Text(rows[i]['dropout']?.toString() ?? '—')),
-                            DataCell(SizedBox(
-                              width: 320,
-                              child: Text(
-                                rows[i]['feature_ids']?.toString() ?? '',
-                                overflow: TextOverflow.ellipsis,
-                              ),
+                            DataCell(FeatureChipList(
+                              featureIds: _splitFeatureIds(
+                                  rows[i]['feature_ids']),
+                              maxWidth: 320,
                             )),
                           ]),
                       ],
@@ -147,5 +146,15 @@ class _PerformancePageState extends ConsumerState<PerformancePage> {
   Widget _metric(Object? v) {
     if (v is num) return Text(v.toStringAsFixed(4));
     return const Text('—');
+  }
+
+  // performance.py serializes feature_ids as a comma-joined string —
+  // split here so FeatureChipList can render pastel pills per family.
+  List<String> _splitFeatureIds(Object? v) {
+    if (v is List) return [for (final f in v) f.toString()];
+    if (v is String && v.isNotEmpty) {
+      return [for (final f in v.split(',')) if (f.isNotEmpty) f];
+    }
+    return const [];
   }
 }
