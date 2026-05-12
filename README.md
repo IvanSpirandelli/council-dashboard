@@ -5,7 +5,7 @@ agents, their connections, token usage, prompts/responses; trace the
 context behind each round's decisions; start, stop, and resume a council
 session; view the resulting model-performance table.
 
-The council itself lives in `../agentic-docking/ml-trainer/`. This repo
+The council itself lives in `../ml-trainer/`. This repo
 is read-mostly: it watches a chosen `runs_root` directory on disk, and
 controls a long-running council subprocess.
 

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -11,9 +9,15 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-from council_dashboard import ingest, supervisor
+from council_dashboard import councils as councils_mod
+from council_dashboard import ingest, performance, supervisor
 from council_dashboard.config import Settings
-from council_dashboard.topology import topology_dict
+
+
+def _canonical_session_dir(name: str) -> Path:
+    """Each council has one persistent session dir at ``runs_root/<name>/``."""
+    return settings.runs_root / name
+
 
 settings = Settings.load()
 app = FastAPI(title="council-dashboard", version="0.1.0")
@@ -37,6 +41,26 @@ class HealthResponse(BaseModel):
     runs_root_exists: bool
     models_root: str
     ml_trainer_repo: str
+    councils_root: str
+    councils_root_exists: bool
+    dashboard_repo: str
+
+
+class ManifestPayload(BaseModel):
+    body: dict[str, Any]
+
+
+class ResourceWritePayload(BaseModel):
+    body: str
+
+
+class PreviewRequest(BaseModel):
+    extra_context: str | None = None
+
+
+class PreviewFromBodyRequest(BaseModel):
+    body: dict[str, Any]
+    extra_context: str | None = None
 
 
 class StartRequest(BaseModel):
@@ -60,69 +84,188 @@ def health() -> HealthResponse:
         runs_root_exists=settings.runs_root.exists(),
         models_root=str(settings.models_root),
         ml_trainer_repo=str(settings.ml_trainer_repo),
+        councils_root=str(settings.councils_root),
+        councils_root_exists=settings.councils_root.exists(),
+        dashboard_repo=str(Path(__file__).resolve().parents[2]),
     )
 
 
 @app.get("/topology")
-def topology() -> dict[str, Any]:
-    return topology_dict()
+def topology(council: str) -> dict[str, Any]:
+    """Topology of the named council."""
+    try:
+        return councils_mod.topology(settings.councils_root, council)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
 
 
-# ── Sessions ─────────────────────────────────────────────────────────
+def _topology_valid_ids(council: str) -> set[str]:
+    """Set of valid agent ids for filtering ``topology_overlay``."""
+    try:
+        topo = councils_mod.topology(settings.councils_root, council)
+    except FileNotFoundError:
+        return set()
+    return {n.get("id") for n in topo.get("nodes", []) if n.get("id")}
 
 
-@app.get("/sessions")
-def sessions() -> list[dict[str, Any]]:
-    return ingest.list_sessions(settings.runs_root)
+# ── Council builder ──────────────────────────────────────────────────
 
 
-@app.get("/sessions/{session_id}")
-def session(session_id: str) -> dict[str, Any]:
-    summary = ingest.session_summary(settings.runs_root, session_id)
+@app.get("/councils")
+def councils_list() -> list[dict[str, Any]]:
+    return councils_mod.list_councils(settings.councils_root)
+
+
+@app.get("/councils/{name}")
+def council_get(name: str) -> dict[str, Any]:
+    try:
+        manifest = councils_mod.read_manifest(settings.councils_root, name)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    return {
+        "manifest": manifest,
+        "resources": councils_mod.list_resources(settings.councils_root, name),
+    }
+
+
+@app.put("/councils/{name}")
+def council_put(name: str, payload: ManifestPayload) -> dict[str, Any]:
+    try:
+        path = councils_mod.write_manifest(
+            settings.councils_root, name, payload.body
+        )
+    except (FileNotFoundError, ValueError) as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "path": str(path)}
+
+
+@app.get("/councils/{name}/resources/{resource_name}")
+def council_resource_get(name: str, resource_name: str) -> dict[str, Any]:
+    try:
+        return councils_mod.read_resource(
+            settings.councils_root, name, resource_name
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+
+
+@app.put("/councils/{name}/resources/{resource_name}")
+def council_resource_put(
+    name: str, resource_name: str, payload: ResourceWritePayload
+) -> dict[str, Any]:
+    try:
+        return councils_mod.write_resource(
+            settings.councils_root, name, resource_name, payload.body
+        )
+    except (FileNotFoundError, ValueError) as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/councils/{name}/agents/{agent_id}/preview")
+def council_preview(
+    name: str, agent_id: str, payload: PreviewRequest | None = None
+) -> dict[str, Any]:
+    extra = payload.extra_context if payload else None
+    try:
+        return councils_mod.render_preview(
+            settings.councils_root,
+            name,
+            agent_id,
+            extra_context=extra,
+            ml_trainer_repo=settings.ml_trainer_repo,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except RuntimeError as e:
+        raise HTTPException(500, str(e))
+
+
+# ── Council-centric session + performance ───────────────────────────
+
+
+@app.get("/councils/{name}/session")
+def council_session(name: str) -> dict[str, Any]:
+    """Summary of the canonical session dir for this council.
+
+    The canonical layout is ``runs_root/<name>/``: one persistent
+    directory the council appends rounds to.
+    """
+    try:
+        councils_mod.read_manifest(settings.councils_root, name)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+
+    session_dir = _canonical_session_dir(name)
+    summary = ingest.session_summary(settings.runs_root, name)
     if summary is None:
-        raise HTTPException(404, f"unknown session: {session_id}")
-    summary["topology_overlay"] = ingest.topology_overlay(summary)
+        runner = supervisor.read_runner_state(session_dir)
+        return {
+            "id": name,
+            "council": name,
+            "path": str(session_dir),
+            "rounds": [],
+            "promoted_total": 0,
+            "llm_call_total": 0,
+            "approx_tokens_total": 0,
+            "runner": runner,
+            "stop_pending": (session_dir / ".STOP").exists(),
+            "topology_overlay": {},
+            "current_round_id": (runner or {}).get("current_round"),
+            "active_call": None,
+        }
+    summary["council"] = name
+    summary["topology_overlay"] = ingest.topology_overlay(
+        summary, _topology_valid_ids(name)
+    )
     return summary
 
 
-@app.get("/sessions/{session_id}/rounds/{round_id}")
-def round_endpoint(session_id: str, round_id: str) -> dict[str, Any]:
-    session_dir = settings.runs_root / session_id
+@app.get("/councils/{name}/rounds/{round_id}")
+def council_round(name: str, round_id: str) -> dict[str, Any]:
+    session_dir = _canonical_session_dir(name)
     detail = ingest.round_detail(session_dir, round_id)
     if detail is None:
-        raise HTTPException(404, f"unknown round: {session_id}/{round_id}")
-    detail["topology_overlay"] = ingest.topology_overlay(detail["summary"])
+        raise HTTPException(404, f"unknown round: {name}/{round_id}")
+    detail["topology_overlay"] = ingest.topology_overlay(
+        detail["summary"], _topology_valid_ids(name)
+    )
     return detail
 
 
-@app.get("/sessions/{session_id}/rounds/{round_id}/llm/{filename}")
-def llm_artifact(session_id: str, round_id: str, filename: str) -> dict[str, Any]:
-    """Return the body of one prompt or response file.
-
-    Filename should be the basename, e.g. ``empirical_analyst_t1.prompt.txt``.
-    """
+@app.get("/councils/{name}/rounds/{round_id}/llm/{filename}")
+def council_llm_artifact(
+    name: str, round_id: str, filename: str
+) -> dict[str, Any]:
     if "/" in filename or ".." in filename:
         raise HTTPException(400, "invalid filename")
-    base = settings.runs_root / session_id / round_id / "llm" / filename
+    base = _canonical_session_dir(name) / round_id / "llm" / filename
     if not base.exists():
         raise HTTPException(404, f"missing artifact: {filename}")
     text = base.read_text(errors="replace")
     return {"filename": filename, "size": base.stat().st_size, "body": text}
 
 
-# ── Process control ──────────────────────────────────────────────────
+@app.get("/councils/{name}/launch-config")
+def council_get_launch_config(name: str) -> dict[str, Any]:
+    session_dir = _canonical_session_dir(name)
+    config = supervisor.read_launch_config(session_dir)
+    return {
+        "exists": config is not None,
+        "config": config,
+        "path": str(supervisor.launch_path(session_dir)),
+    }
 
 
-@app.post("/sessions/{session_id}/launch-config")
-def set_launch_config(session_id: str, req: StartRequest) -> dict[str, Any]:
-    session_dir = settings.runs_root / session_id
+@app.post("/councils/{name}/launch-config")
+def council_set_launch_config(name: str, req: StartRequest) -> dict[str, Any]:
+    session_dir = _canonical_session_dir(name)
     supervisor.write_launch_config(session_dir, req.model_dump())
-    return {"ok": True, "path": str(supervisor._launch_path(session_dir))}
+    return {"ok": True, "path": str(supervisor.launch_path(session_dir))}
 
 
-@app.post("/sessions/{session_id}/start", response_model=StartResponse)
-def start_session(session_id: str) -> StartResponse:
-    session_dir = settings.runs_root / session_id
+@app.post("/councils/{name}/start", response_model=StartResponse)
+def council_start(name: str) -> StartResponse:
+    session_dir = _canonical_session_dir(name)
     try:
         state = supervisor.start(session_dir)
     except FileNotFoundError as e:
@@ -130,52 +273,59 @@ def start_session(session_id: str) -> StartResponse:
     return StartResponse(state=state)
 
 
-@app.post("/sessions/{session_id}/stop")
-def stop_session(session_id: str, force: bool = False) -> dict[str, Any]:
-    session_dir = settings.runs_root / session_id
+@app.post("/councils/{name}/stop")
+def council_stop(name: str, force: bool = False) -> dict[str, Any]:
+    session_dir = _canonical_session_dir(name)
     if force:
         return supervisor.force_stop(session_dir)
     return supervisor.request_stop(session_dir)
 
 
-@app.post("/sessions/{session_id}/clear-stop")
-def clear_stop(session_id: str) -> dict[str, Any]:
-    session_dir = settings.runs_root / session_id
+@app.post("/councils/{name}/clear-stop")
+def council_clear_stop(name: str) -> dict[str, Any]:
+    session_dir = _canonical_session_dir(name)
     supervisor.clear_stop(session_dir)
     return {"ok": True}
 
 
-# ── Performance table ────────────────────────────────────────────────
-
-
-@app.get("/performance-table")
-def performance_table(
-    session: str | None = None,
-    round_id: str | None = None,
-    sort: str = "cl2",
-    asc: bool = False,
-    all_variants: bool = False,
+@app.get("/councils/{name}/performance")
+def council_performance(
+    name: str,
+    sort: str = "test_pearson_r_mean",
+    ascending: bool = False,
+    limit: int | None = None,
+    rebuild: bool = False,
 ) -> dict[str, Any]:
-    """Wrap ``scripts/performance_table.py``; returns parsed rows + raw text."""
-    script = Path(__file__).resolve().parents[2] / "scripts" / "performance_table.py"
-    args: list[str] = [sys.executable, str(script), "--json"]
-    if session:
-        args += ["--session", str(settings.runs_root / session)]
-    if round_id:
-        args += ["--round", round_id]
-    args += ["--sort", sort]
-    if asc:
-        args.append("--asc")
-    if all_variants:
-        args.append("--all-variants")
-    args += ["--models-root", str(settings.models_root)]
-    proc = subprocess.run(args, capture_output=True, text=True, check=False)
-    if proc.returncode != 0:
-        raise HTTPException(500, f"performance_table.py failed: {proc.stderr[:400]}")
-    import json as _json
-
+    """Cached corpus-derived performance table for this council."""
     try:
-        payload = _json.loads(proc.stdout)
-    except _json.JSONDecodeError:
-        raise HTTPException(500, "performance_table.py emitted non-JSON output")
-    return payload
+        councils_mod.read_manifest(settings.councils_root, name)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    if rebuild:
+        performance.load_performance(settings.models_root, rebuild=True)
+    return performance.performance_payload(
+        settings.models_root,
+        sort=sort,
+        ascending=ascending,
+        limit=limit,
+    )
+
+
+@app.post("/councils/{name}/agents/{agent_id}/preview-from-body")
+def council_preview_from_body(
+    name: str, agent_id: str, payload: PreviewFromBodyRequest,
+) -> dict[str, Any]:
+    """Render against an in-flight (unsaved) manifest body."""
+    try:
+        return councils_mod.render_preview(
+            settings.councils_root,
+            name,
+            agent_id,
+            extra_context=payload.extra_context,
+            ml_trainer_repo=settings.ml_trainer_repo,
+            manifest_body=payload.body,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except RuntimeError as e:
+        raise HTTPException(500, str(e))

@@ -5,44 +5,44 @@ import 'package:go_router/go_router.dart';
 import '../api/providers.dart';
 import '../widgets/agent_graph.dart';
 import '../widgets/error_view.dart';
+import '../widgets/launch_config_panel.dart';
 
-class SessionPage extends ConsumerWidget {
-  const SessionPage({super.key, required this.sessionId});
+/// Detailed view of a council's canonical session: rounds, topology
+/// overlay, start/stop controls.
+class CouncilRunPage extends ConsumerWidget {
+  const CouncilRunPage({super.key, required this.councilName});
 
-  final String sessionId;
+  final String councilName;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final session = ref.watch(sessionProvider(sessionId));
-    final topology = ref.watch(topologyProvider);
+    final session = ref.watch(councilSessionProvider(councilName));
+    final topology = ref.watch(councilTopologyProvider(councilName));
     return Scaffold(
       appBar: AppBar(
-        title: Text(sessionId),
+        title: Text('$councilName · run'),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: () => ref.invalidate(sessionProvider(sessionId)),
-          ),
-          IconButton(
-            tooltip: 'Performance table for this session',
-            icon: const Icon(Icons.table_chart_outlined),
-            onPressed: () => context.push('/performance?session=$sessionId'),
+            onPressed: () =>
+                ref.invalidate(councilSessionProvider(councilName)),
           ),
         ],
       ),
       body: session.when(
         loading: () => const LoadingView(label: 'Loading session…'),
         error: (e, _) => ErrorView(e,
-            onRetry: () => ref.invalidate(sessionProvider(sessionId))),
-        data: (data) => _SessionBody(
-          sessionId: sessionId,
+            onRetry: () =>
+                ref.invalidate(councilSessionProvider(councilName))),
+        data: (data) => _Body(
+          councilName: councilName,
           summary: data,
           topology: topology,
           onStop: () async {
             final api = ref.read(dashboardApiProvider);
             try {
-              await api.stop(sessionId);
-              ref.invalidate(sessionProvider(sessionId));
+              await api.councilStop(councilName);
+              ref.invalidate(councilSessionProvider(councilName));
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
@@ -58,43 +58,24 @@ class SessionPage extends ConsumerWidget {
               }
             }
           },
-          onResume: () async {
-            final api = ref.read(dashboardApiProvider);
-            try {
-              await api.clearStop(sessionId);
-              await api.start(sessionId);
-              ref.invalidate(sessionProvider(sessionId));
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Council launched.')));
-              }
-            } catch (e) {
-              if (context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Start failed: $e')));
-              }
-            }
-          },
         ),
       ),
     );
   }
 }
 
-class _SessionBody extends StatelessWidget {
-  const _SessionBody({
-    required this.sessionId,
+class _Body extends StatelessWidget {
+  const _Body({
+    required this.councilName,
     required this.summary,
     required this.topology,
     required this.onStop,
-    required this.onResume,
   });
 
-  final String sessionId;
+  final String councilName;
   final Map<String, dynamic> summary;
   final AsyncValue<Map<String, dynamic>> topology;
   final Future<void> Function() onStop;
-  final Future<void> Function() onResume;
 
   @override
   Widget build(BuildContext context) {
@@ -104,6 +85,23 @@ class _SessionBody extends StatelessWidget {
     final runner = summary['runner'] as Map<String, dynamic>?;
     final running = (runner?['alive'] ?? false) as bool;
     final stopPending = summary['stop_pending'] == true;
+    final currentRoundId = summary['current_round_id'] as String?;
+    final knownIds = rounds.map((r) => r['round_id'] as String).toSet();
+    final displayRounds = <Map<String, dynamic>>[
+      ...rounds,
+      if (running &&
+          currentRoundId != null &&
+          !knownIds.contains(currentRoundId))
+        {
+          'round_id': currentRoundId,
+          'status': 'pending',
+          'promoted_count': 0,
+          'candidate_count': 0,
+          'executed_count': 0,
+          'llm_call_count': 0,
+          'approx_tokens': 0,
+        },
+    ];
 
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -118,11 +116,12 @@ class _SessionBody extends StatelessWidget {
                 _stat('Rounds', '${summary['rounds']?.length ?? 0}'),
                 _stat('Promoted total', '${summary['promoted_total']}'),
                 _stat('LLM calls', '${summary['llm_call_total']}'),
-                _stat(
-                    '≈ Tokens', _kfmt(summary['approx_tokens_total'] as num? ?? 0)),
+                _stat('≈ Tokens',
+                    _kfmt(summary['approx_tokens_total'] as num? ?? 0)),
                 const Divider(),
                 ListTile(
-                  leading: Icon(running ? Icons.play_circle : Icons.stop_circle),
+                  leading:
+                      Icon(running ? Icons.play_circle : Icons.stop_circle),
                   title: Text(running ? 'Running' : 'Idle'),
                   subtitle: Text(stopPending
                       ? 'Stop pending — exits after current round'
@@ -130,23 +129,21 @@ class _SessionBody extends StatelessWidget {
                           ? 'No runner state'
                           : (runner['status']?.toString() ?? '—'))),
                 ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: Wrap(
-                    spacing: 8,
-                    children: [
-                      FilledButton.tonalIcon(
-                        onPressed: running ? () => onStop() : null,
+                if (running)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: FilledButton.tonalIcon(
+                        onPressed: () => onStop(),
                         icon: const Icon(Icons.stop),
                         label: const Text('Stop'),
                       ),
-                      FilledButton.icon(
-                        onPressed: running ? null : () => onResume(),
-                        icon: const Icon(Icons.play_arrow),
-                        label: const Text('Start / Resume'),
-                      ),
-                    ],
+                    ),
                   ),
+                LaunchConfigPanel(
+                  councilName: councilName,
+                  running: running,
                 ),
                 const Divider(),
                 Padding(
@@ -154,29 +151,12 @@ class _SessionBody extends StatelessWidget {
                   child: Text('Rounds',
                       style: Theme.of(context).textTheme.titleSmall),
                 ),
-                for (final r in rounds)
-                  ListTile(
-                    dense: true,
-                    leading: CircleAvatar(
-                      radius: 14,
-                      child: Text(
-                        '${r['round_id']}'.replaceAll('round_', ''),
-                        style: const TextStyle(fontSize: 11),
-                      ),
-                    ),
-                    title: Text(
-                        '${r['promoted_count']} promoted / ${r['candidate_count']} cands · ${r['executed_count']} runs'),
-                    subtitle: Text(
-                        '${r['llm_call_count']} LLM calls · ≈${_kfmt(r['approx_tokens'] as num? ?? 0)} tok'),
-                    trailing: r['stop_signal'] != null
-                        ? Chip(
-                            label: Text(r['stop_signal'] as String),
-                            visualDensity: VisualDensity.compact,
-                          )
-                        : null,
-                    onTap: () => context.push(
-                        '/sessions/$sessionId/rounds/${r['round_id']}'),
+                if (displayRounds.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(16),
+                    child: Text('No rounds yet — Save & Start to begin.'),
                   ),
+                for (final r in displayRounds) _roundTile(context, r),
               ],
             ),
           ),
@@ -194,15 +174,17 @@ class _SessionBody extends StatelessWidget {
                     child: Align(
                       alignment: Alignment.centerLeft,
                       child: Text(
-                        'Agent topology — overlay aggregates this session',
+                        'Agent topology — overlay aggregates this council',
                         style: Theme.of(context).textTheme.titleMedium,
                       ),
                     ),
                   ),
                   Expanded(
                     child: AgentGraph(
-                      nodes: (t['nodes'] as List).cast<Map<String, dynamic>>(),
-                      edges: (t['edges'] as List).cast<Map<String, dynamic>>(),
+                      nodes:
+                          (t['nodes'] as List).cast<Map<String, dynamic>>(),
+                      edges:
+                          (t['edges'] as List).cast<Map<String, dynamic>>(),
                       overlay: overlay,
                     ),
                   ),
@@ -212,6 +194,52 @@ class _SessionBody extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _roundTile(BuildContext context, Map<String, dynamic> r) {
+    final status = (r['status'] as String?) ?? 'completed';
+    final id = r['round_id'] as String;
+    final shortId = id.replaceAll('round_', '');
+    final isPending = status == 'pending';
+    final isRunning = status == 'running';
+    final trailing = isPending || isRunning
+        ? Chip(
+            label: Text(isPending ? 'pending' : 'running'),
+            visualDensity: VisualDensity.compact,
+            backgroundColor: isRunning
+                ? Colors.blue.withValues(alpha: 0.15)
+                : Colors.grey.withValues(alpha: 0.15),
+          )
+        : (r['stop_signal'] != null
+            ? Chip(
+                label: Text(r['stop_signal'] as String),
+                visualDensity: VisualDensity.compact,
+              )
+            : null);
+    final title = isPending
+        ? Text('Round $shortId — pending')
+        : Text(
+            '${r['promoted_count']} promoted / ${r['candidate_count']} cands · ${r['executed_count']} runs');
+    final subtitle = isPending
+        ? const Text('waiting for first LLM call…')
+        : Text(
+            '${r['llm_call_count']} LLM calls · ≈${_kfmt(r['approx_tokens'] as num? ?? 0)} tok');
+    return ListTile(
+      dense: true,
+      leading: CircleAvatar(
+        radius: 14,
+        backgroundColor: isRunning
+            ? Colors.blue
+            : (isPending ? Colors.grey : null),
+        child: Text(shortId, style: const TextStyle(fontSize: 11)),
+      ),
+      title: title,
+      subtitle: subtitle,
+      trailing: trailing,
+      onTap: isPending
+          ? null
+          : () => context.push('/councils/$councilName/rounds/$id'),
     );
   }
 
@@ -228,7 +256,7 @@ class _SessionBody extends StatelessWidget {
 
   String _kfmt(num v) {
     if (v >= 1000000) return '${(v / 1000000).toStringAsFixed(1)}M';
-    if (v >= 1000) return '${(v / 1000).toStringAsFixed(1)}k';
+    if (v >= 1000) return '${(v / 1000).round()}k';
     return v.toString();
   }
 }

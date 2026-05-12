@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'pages/council_builder_page.dart';
+import 'pages/council_home_page.dart';
+import 'pages/council_run_page.dart';
+import 'pages/home_page.dart';
 import 'pages/performance_page.dart';
 import 'pages/round_page.dart';
-import 'pages/session_page.dart';
-import 'pages/sessions_page.dart';
 
 void main() {
   runApp(const ProviderScope(child: CouncilDashboardApp()));
@@ -13,23 +15,35 @@ void main() {
 
 final _router = GoRouter(
   routes: [
-    GoRoute(path: '/', builder: (_, __) => const SessionsPage()),
+    GoRoute(path: '/', builder: (_, __) => const HomePage()),
     GoRoute(
-      path: '/sessions/:id',
+      path: '/councils/:name',
       builder: (_, state) =>
-          SessionPage(sessionId: state.pathParameters['id']!),
+          CouncilHomePage(councilName: state.pathParameters['name']!),
     ),
     GoRoute(
-      path: '/sessions/:id/rounds/:round',
+      path: '/councils/:name/edit',
+      builder: (_, state) => CouncilBuilderPage(
+        councilName: state.pathParameters['name']!,
+        initialAgentId: state.uri.queryParameters['agent'],
+      ),
+    ),
+    GoRoute(
+      path: '/councils/:name/run',
+      builder: (_, state) =>
+          CouncilRunPage(councilName: state.pathParameters['name']!),
+    ),
+    GoRoute(
+      path: '/councils/:name/rounds/:round',
       builder: (_, state) => RoundPage(
-        sessionId: state.pathParameters['id']!,
+        councilName: state.pathParameters['name']!,
         roundId: state.pathParameters['round']!,
       ),
     ),
     GoRoute(
-      path: '/performance',
+      path: '/councils/:name/performance',
       builder: (_, state) =>
-          PerformancePage(sessionFilter: state.uri.queryParameters['session']),
+          PerformancePage(councilName: state.pathParameters['name']!),
     ),
   ],
 );

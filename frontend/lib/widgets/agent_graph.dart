@@ -2,13 +2,12 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
-/// Renders the static council topology with per-round overlay metrics.
+/// Renders the council topology with per-round overlay metrics.
 ///
-/// Nodes are positioned by normalized (x, y) coordinates from the
-/// backend's topology.py. Each node's outline thickness is scaled by
-/// LLM call count, its fill by approximate token volume, and tap
-/// fires the optional [onAgentTap].
-class AgentGraph extends StatelessWidget {
+/// Tiles start at normalized (x, y) coordinates from the backend's
+/// topology.py and can be dragged. Tap fires [onAgentTap]. Edges are
+/// repainted as tiles move.
+class AgentGraph extends StatefulWidget {
   const AgentGraph({
     super.key,
     required this.nodes,
@@ -23,175 +22,284 @@ class AgentGraph extends StatelessWidget {
   final void Function(String agentId)? onAgentTap;
 
   @override
+  State<AgentGraph> createState() => _AgentGraphState();
+}
+
+const double _tileW = 168.0;
+const double _tileH = 78.0;
+const double _tileWNon = 110.0;
+const double _tileHNon = 50.0;
+const Color _bgColor = Color(0xFF34495E);
+const Color _tileColor = Color(0xFFFFF59D);
+const Color _nonAgentTileColor = Color(0xFFE0E0E0);
+const Color _edgeColor = Color(0xCCFFFFFF);
+
+Size _sizeFor(bool isLLM) =>
+    isLLM ? const Size(_tileW, _tileH) : const Size(_tileWNon, _tileHNon);
+
+class _AgentGraphState extends State<AgentGraph> {
+  final Map<String, Offset> _positions = {};
+
+  void _ensurePositions(Size size) {
+    final sized = size.width > 0 && size.height > 0;
+    if (!sized) return;
+    for (final n in widget.nodes) {
+      final id = n['id'] as String;
+      if (!_positions.containsKey(id)) {
+        _positions[id] = Offset(
+          (n['x'] as num).toDouble() * size.width,
+          (n['y'] as num).toDouble() * size.height,
+        );
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        final size = Size(constraints.maxWidth, constraints.maxHeight);
-        return GestureDetector(
-          onTapUp: (details) {
-            final hit = _hitTest(details.localPosition, size);
-            if (hit != null && onAgentTap != null) onAgentTap!(hit);
-          },
-          child: CustomPaint(
-            size: size,
-            painter: _GraphPainter(
-              nodes: nodes,
-              edges: edges,
-              overlay: overlay,
-              theme: Theme.of(context),
+    return LayoutBuilder(builder: (context, constraints) {
+      final size = Size(constraints.maxWidth, constraints.maxHeight);
+      _ensurePositions(size);
+      final maxTokens = _maxTokens();
+
+      final sizes = <String, Size>{
+        for (final n in widget.nodes)
+          n['id'] as String: _sizeFor(n['kind'] == 'llm'),
+      };
+
+      return Container(
+        color: _bgColor,
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: CustomPaint(
+                painter: _EdgePainter(
+                  edges: widget.edges,
+                  positions: Map<String, Offset>.from(_positions),
+                  sizes: sizes,
+                ),
+              ),
+            ),
+            for (final n in widget.nodes) _buildTile(n, maxTokens, size),
+          ],
+        ),
+      );
+    });
+  }
+
+  Widget _buildTile(Map<String, dynamic> n, double maxTokens, Size size) {
+    final id = n['id'] as String;
+    final pos = _positions[id] ?? Offset.zero;
+    final ov = widget.overlay[id];
+    final tokens = (ov?['approx_tokens'] as num?)?.toDouble() ?? 0.0;
+    final calls = (ov?['calls'] as num?)?.toInt() ?? 0;
+    final wall = (ov?['wall_seconds'] as num?)?.toDouble() ?? 0.0;
+    final active = (ov?['active'] as bool?) ?? false;
+    final isLLM = n['kind'] == 'llm';
+    final tileSize = _sizeFor(isLLM);
+    final hw = tileSize.width / 2;
+    final hh = tileSize.height / 2;
+    final (statusColor, statusText) = _statusFor(active, calls, isLLM);
+
+    return Positioned(
+      left: pos.dx - hw,
+      top: pos.dy - hh,
+      width: tileSize.width,
+      height: tileSize.height,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => widget.onAgentTap?.call(id),
+        onPanUpdate: (d) {
+          setState(() {
+            final next = (_positions[id] ?? pos) + d.delta;
+            final clamped = Offset(
+              next.dx.clamp(hw, math.max(hw, size.width - hw)),
+              next.dy.clamp(hh, math.max(hh, size.height - hh)),
+            );
+            _positions[id] = clamped;
+          });
+        },
+        child: MouseRegion(
+          cursor: SystemMouseCursors.move,
+          child: Container(
+            decoration: BoxDecoration(
+              color: isLLM ? _tileColor : _nonAgentTileColor,
+              border: Border.all(
+                color: active ? Colors.lightBlueAccent : Colors.black87,
+                width: active ? 2.5 : 1.5,
+              ),
+              borderRadius: BorderRadius.circular(6),
+              boxShadow: const [
+                BoxShadow(color: Color(0x55000000), blurRadius: 4, offset: Offset(0, 2)),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(5),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Container(
+                    color: statusColor,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 6, vertical: 1),
+                    child: Text(
+                      statusText,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w600,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                  Expanded(
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Text(
+                            n['label'] as String,
+                            style: const TextStyle(
+                              color: Colors.black,
+                              fontSize: 13,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.center,
+                          ),
+                          if (isLLM) ...[
+                            const SizedBox(height: 2),
+                            Text(
+                              calls == 0
+                                  ? '—'
+                                  : '$calls · ≈${_fmt(tokens)} tok · ${wall.toStringAsFixed(0)}s',
+                              style: const TextStyle(
+                                  color: Colors.black87, fontSize: 11),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.center,
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 
-  String? _hitTest(Offset p, Size size) {
-    for (final n in nodes) {
-      final c = Offset((n['x'] as num) * size.width, (n['y'] as num) * size.height);
-      if ((c - p).distance <= 56) return n['id'] as String;
-    }
-    return null;
-  }
-}
-
-class _GraphPainter extends CustomPainter {
-  _GraphPainter({
-    required this.nodes,
-    required this.edges,
-    required this.overlay,
-    required this.theme,
-  });
-
-  final List<Map<String, dynamic>> nodes;
-  final List<Map<String, dynamic>> edges;
-  final Map<String, Map<String, dynamic>> overlay;
-  final ThemeData theme;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final nodeById = {for (final n in nodes) n['id'] as String: n};
-    final maxTokens = _maxTokens();
-
-    // Edges first.
-    for (final e in edges) {
-      final src = nodeById[e['src']];
-      final dst = nodeById[e['dst']];
-      if (src == null || dst == null) continue;
-      final p1 = _center(src, size);
-      final p2 = _center(dst, size);
-      _drawEdge(canvas, p1, p2, e['label'] as String);
-    }
-
-    // Nodes.
-    for (final n in nodes) {
-      final id = n['id'] as String;
-      final c = _center(n, size);
-      final ov = overlay[id];
-      final tokens = (ov?['approx_tokens'] as num?)?.toDouble() ?? 0.0;
-      final calls = (ov?['calls'] as num?)?.toInt() ?? 0;
-      final wall = (ov?['wall_seconds'] as num?)?.toDouble() ?? 0.0;
-      final isLLM = n['kind'] == 'llm';
-      final fill = _fillColor(isLLM, tokens, maxTokens);
-      final stroke = isLLM ? theme.colorScheme.primary : theme.colorScheme.outline;
-      final r = 52.0 + math.min(calls.toDouble() * 4.0, 16.0);
-      canvas.drawCircle(c, r, Paint()..color = fill);
-      canvas.drawCircle(
-        c,
-        r,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = isLLM ? 2.5 + math.min(calls.toDouble(), 4) : 2.0
-          ..color = stroke,
-      );
-      _drawNodeLabel(canvas, c, n['label'] as String, calls, tokens, wall);
-    }
+  (Color, String) _statusFor(bool active, int calls, bool isLLM) {
+    if (!isLLM) return (const Color(0xFF607D8B), 'code');
+    if (active) return (const Color(0xFF2196F3), 'running');
+    if (calls > 0) return (const Color(0xFF4CAF50), 'done');
+    return (const Color(0xFF757575), 'idle');
   }
 
   double _maxTokens() {
     double m = 1.0;
-    for (final v in overlay.values) {
+    for (final v in widget.overlay.values) {
       final t = (v['approx_tokens'] as num?)?.toDouble() ?? 0.0;
       if (t > m) m = t;
     }
     return m;
   }
 
-  Color _fillColor(bool isLLM, double tokens, double maxTokens) {
-    if (!isLLM) return theme.colorScheme.surfaceContainerHighest;
-    final t = (tokens / maxTokens).clamp(0.0, 1.0);
-    return Color.lerp(
-          theme.colorScheme.primaryContainer,
-          theme.colorScheme.primary,
-          t * 0.6,
-        ) ??
-        theme.colorScheme.primaryContainer;
+  String _fmt(double v) {
+    if (v >= 1e6) return '${(v / 1e6).toStringAsFixed(1)}M';
+    if (v >= 1e3) return '${(v / 1e3).round()}k';
+    return v.toStringAsFixed(0);
+  }
+}
+
+class _EdgePainter extends CustomPainter {
+  _EdgePainter({
+    required this.edges,
+    required this.positions,
+    required this.sizes,
+  });
+
+  final List<Map<String, dynamic>> edges;
+  final Map<String, Offset> positions;
+  final Map<String, Size> sizes;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    for (final e in edges) {
+      final srcId = e['src'] as String;
+      final dstId = e['dst'] as String;
+      final a = positions[srcId];
+      final b = positions[dstId];
+      if (a == null || b == null) continue;
+      final aSize = sizes[srcId] ?? const Size(_tileW, _tileH);
+      final bSize = sizes[dstId] ?? const Size(_tileW, _tileH);
+      _drawEdge(canvas, a, b, aSize, bSize, e['label'] as String);
+    }
   }
 
-  Offset _center(Map<String, dynamic> n, Size s) =>
-      Offset((n['x'] as num) * s.width, (n['y'] as num) * s.height);
-
-  void _drawEdge(Canvas canvas, Offset a, Offset b, String label) {
-    final paint = Paint()
-      ..color = theme.colorScheme.outlineVariant
-      ..strokeWidth = 1.5;
-    canvas.drawLine(a, b, paint);
-    // Arrowhead.
-    final dir = (b - a);
+  void _drawEdge(
+      Canvas canvas, Offset a, Offset b, Size aSize, Size bSize, String label) {
+    final dir = b - a;
     final len = dir.distance;
     if (len <= 0) return;
     final unit = dir / len;
-    final tip = b - unit * 56;
+    final aClip = a + unit * _clipDist(unit, aSize);
+    final bClip = b - unit * _clipDist(unit, bSize);
+
+    canvas.drawLine(
+      aClip,
+      bClip,
+      Paint()
+        ..color = _edgeColor
+        ..strokeWidth = 1.5,
+    );
+
     final perp = Offset(-unit.dy, unit.dx);
-    final left = tip - unit * 8 + perp * 6;
-    final right = tip - unit * 8 - perp * 6;
+    final back = bClip - unit * 9;
+    final left = back + perp * 6;
+    final right = back - perp * 6;
     final path = Path()
-      ..moveTo(tip.dx, tip.dy)
+      ..moveTo(bClip.dx, bClip.dy)
       ..lineTo(left.dx, left.dy)
       ..lineTo(right.dx, right.dy)
       ..close();
-    canvas.drawPath(path, Paint()..color = theme.colorScheme.outline);
+    canvas.drawPath(path, Paint()..color = _edgeColor);
 
-    // Label near midpoint.
-    final mid = (a + b) / 2;
-    _text(canvas, mid + const Offset(8, 8), label, theme.textTheme.labelSmall);
+    final mid = (aClip + bClip) / 2;
+    _text(canvas, mid + const Offset(6, 4), label,
+        const TextStyle(color: Colors.white70, fontSize: 11));
   }
 
-  void _drawNodeLabel(
-      Canvas canvas, Offset c, String label, int calls, double tokens, double wall) {
-    _text(canvas, c + const Offset(0, -8), label,
-        theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w600),
-        align: TextAlign.center, maxWidth: 140);
-    final sub = calls == 0
-        ? '—'
-        : '$calls call${calls == 1 ? '' : 's'}'
-            ' · ≈${_fmt(tokens)} tok'
-            ' · ${wall.toStringAsFixed(0)}s';
-    _text(canvas, c + const Offset(0, 14), sub,
-        theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
-        align: TextAlign.center, maxWidth: 160);
+  double _clipDist(Offset u, Size tile) {
+    final ax = u.dx.abs();
+    final ay = u.dy.abs();
+    final hw = tile.width / 2;
+    final hh = tile.height / 2;
+    final tx = ax > 1e-9 ? hw / ax : double.infinity;
+    final ty = ay > 1e-9 ? hh / ay : double.infinity;
+    return math.min(tx, ty);
   }
 
-  void _text(Canvas canvas, Offset p, String s, TextStyle? style,
-      {TextAlign align = TextAlign.left, double? maxWidth}) {
+  void _text(Canvas canvas, Offset p, String s, TextStyle style) {
     final tp = TextPainter(
       text: TextSpan(text: s, style: style),
       textDirection: TextDirection.ltr,
-      textAlign: align,
-      maxLines: 2,
+      maxLines: 1,
       ellipsis: '…',
-    )..layout(maxWidth: maxWidth ?? 200);
-    final dx = align == TextAlign.center ? p.dx - tp.width / 2 : p.dx;
-    tp.paint(canvas, Offset(dx, p.dy));
-  }
-
-  String _fmt(double v) {
-    if (v >= 1e6) return '${(v / 1e6).toStringAsFixed(1)}M';
-    if (v >= 1e3) return '${(v / 1e3).toStringAsFixed(1)}k';
-    return v.toStringAsFixed(0);
+    )..layout(maxWidth: 200);
+    tp.paint(canvas, p);
   }
 
   @override
-  bool shouldRepaint(_GraphPainter old) =>
-      old.nodes != nodes || old.edges != edges || old.overlay != overlay;
+  bool shouldRepaint(_EdgePainter old) => true;
 }

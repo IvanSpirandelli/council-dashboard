@@ -13,11 +13,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
-from council_dashboard.topology import NODES
-
-# Map LLM-call agent names to topology node ids. The recorder uses
-# ``empirical_analyst`` / ``theoretical_analyst`` / ``decider`` /
-# ``critic`` (sometimes ``master_critic``); normalize all of those.
+# Map LLM-call agent names to topology node ids. Old sessions (pre-2026-05-10)
+# recorded the critic as ``"critic"``; the manifest-driven runtime records
+# its manifest id ``"master_critic"``. Keep both forms readable.
 _AGENT_ALIASES: dict[str, str] = {
     "empirical_analyst": "empirical_analyst",
     "empirical": "empirical_analyst",
@@ -63,36 +61,6 @@ def _read_json(path: Path) -> dict[str, Any] | None:
 # ── Sessions ─────────────────────────────────────────────────────────
 
 
-def list_sessions(runs_root: Path) -> list[dict[str, Any]]:
-    """Each subdirectory under ``runs_root`` that contains ``round_*`` dirs."""
-    if not runs_root.exists():
-        return []
-    out: list[dict[str, Any]] = []
-    for entry in sorted(runs_root.iterdir()):
-        if not entry.is_dir() or entry.name.startswith("."):
-            continue
-        rounds = sorted(
-            d.name for d in entry.iterdir() if d.is_dir() and d.name.startswith("round_")
-        )
-        if not rounds:
-            continue
-        runner_state = _read_json(entry / ".runner.json")
-        out.append(
-            {
-                "id": entry.name,
-                "path": str(entry),
-                "round_count": len(rounds),
-                "first_round": rounds[0],
-                "last_round": rounds[-1],
-                "modified_at": datetime.fromtimestamp(entry.stat().st_mtime).isoformat(),
-                "runner": runner_state,
-                "stop_pending": (entry / ".STOP").exists(),
-            }
-        )
-    out.sort(key=lambda s: s["modified_at"], reverse=True)
-    return out
-
-
 def session_summary(runs_root: Path, session_id: str) -> dict[str, Any] | None:
     session_dir = runs_root / session_id
     if not session_dir.is_dir():
@@ -102,6 +70,15 @@ def session_summary(runs_root: Path, session_id: str) -> dict[str, Any] | None:
     total_calls = sum(r["llm_call_count"] for r in rounds)
     total_prompt_chars = sum(r["prompt_chars"] for r in rounds)
     total_response_chars = sum(r["response_chars"] for r in rounds)
+    runner = _read_json(session_dir / ".runner.json")
+    if runner and runner.get("pid"):
+        runner["alive"] = _pid_alive(int(runner["pid"]))
+    current_round_id = (runner or {}).get("current_round")
+    active_call = None
+    for r in rounds:
+        if r["round_id"] == current_round_id and r.get("active_call"):
+            active_call = r["active_call"]
+            break
     return {
         "id": session_id,
         "path": str(session_dir),
@@ -111,8 +88,10 @@ def session_summary(runs_root: Path, session_id: str) -> dict[str, Any] | None:
         "prompt_chars_total": total_prompt_chars,
         "response_chars_total": total_response_chars,
         "approx_tokens_total": _approx_tokens(total_prompt_chars + total_response_chars),
-        "runner": _read_json(session_dir / ".runner.json"),
+        "runner": runner,
         "stop_pending": (session_dir / ".STOP").exists(),
+        "current_round_id": current_round_id,
+        "active_call": active_call,
     }
 
 
@@ -130,7 +109,9 @@ def list_rounds(session_dir: Path) -> list[dict[str, Any]]:
 
 
 def round_summary(round_dir: Path) -> dict[str, Any]:
-    decision = _read_json(round_dir / "decision.json") or {}
+    decision_path = round_dir / "decision.json"
+    decision = _read_json(decision_path) or {}
+    has_decision = decision_path.exists()
     runs = _read_jsonl(round_dir / "runs.jsonl")
     llm_calls = _read_jsonl(round_dir / "llm_calls.jsonl")
 
@@ -165,6 +146,8 @@ def round_summary(round_dir: Path) -> dict[str, Any]:
         slot["wall_seconds"] += _wall_seconds(call)
         slot["approx_tokens"] = _approx_tokens(slot["prompt_chars"] + slot["response_chars"])
 
+    active_call = _in_flight_call(llm_calls) if not has_decision else None
+    status = "completed" if has_decision else "running"
     return {
         "round_id": decision.get("round_id", round_dir.name),
         "timestamp": decision.get("timestamp"),
@@ -181,7 +164,28 @@ def round_summary(round_dir: Path) -> dict[str, Any]:
         "approx_tokens": _approx_tokens(prompt_chars + response_chars),
         "per_agent": list(per_agent.values()),
         "results": _result_summary(runs),
+        "status": status,
+        "active_call": active_call,
     }
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _in_flight_call(calls: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Return the most recent call lacking ``completed_at`` (= currently running)."""
+    for c in reversed(calls):
+        if not c.get("completed_at") and c.get("started_at"):
+            return {
+                "agent": _agent_id(c.get("agent", "unknown")),
+                "started_at": c.get("started_at"),
+            }
+    return None
 
 
 def round_detail(session_dir: Path, round_id: str) -> dict[str, Any] | None:
@@ -300,8 +304,16 @@ def read_response(runs_root: Path, relative: str) -> Any:
 # ── Per-agent connectivity overlay ───────────────────────────────────
 
 
-def topology_overlay(round_or_session: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Map node_id → {calls, approx_tokens, wall_seconds} for the frontend."""
+def topology_overlay(
+    round_or_session: dict[str, Any],
+    valid_ids: set[str],
+) -> dict[str, dict[str, Any]]:
+    active_agent = (round_or_session.get("active_call") or {}).get("agent")
+    """Map node_id → {calls, approx_tokens, wall_seconds} for the frontend.
+
+    ``valid_ids`` filters out unknown agent names (e.g., a renamed seat)
+    so the overlay only attaches data the topology can render.
+    """
     per_agent_iter: Iterable[dict[str, Any]]
     if "per_agent" in round_or_session:  # round summary
         per_agent_iter = round_or_session["per_agent"]
@@ -323,9 +335,18 @@ def topology_overlay(round_or_session: dict[str, Any]) -> dict[str, dict[str, An
                 acc["approx_tokens"] += slot["approx_tokens"]
                 acc["wall_seconds"] += slot["wall_seconds"]
         per_agent_iter = sums.values()
-    out: dict[str, dict[str, Any]] = {}
-    valid_ids = {n["id"] for n in NODES}
+    overlay: dict[str, dict[str, Any]] = {}
     for slot in per_agent_iter:
-        if slot["agent"] in valid_ids:
-            out[slot["agent"]] = slot
-    return out
+        if slot["agent"] not in valid_ids:
+            continue
+        slot = {**slot, "active": slot["agent"] == active_agent}
+        overlay[slot["agent"]] = slot
+    if active_agent and active_agent in valid_ids and active_agent not in overlay:
+        overlay[active_agent] = {
+            "agent": active_agent,
+            "calls": 0,
+            "approx_tokens": 0,
+            "wall_seconds": 0.0,
+            "active": True,
+        }
+    return overlay

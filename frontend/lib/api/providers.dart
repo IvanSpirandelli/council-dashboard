@@ -12,75 +12,80 @@ final healthProvider = FutureProvider<Map<String, dynamic>>((ref) async {
   return ref.watch(dashboardApiProvider).health();
 });
 
-final topologyProvider = FutureProvider<Map<String, dynamic>>((ref) async {
-  return ref.watch(dashboardApiProvider).topology();
-});
+// ── Councils ──────────────────────────────────────────────────────────
 
-final sessionsProvider =
+final councilsProvider =
     FutureProvider<List<Map<String, dynamic>>>((ref) async {
-  return ref.watch(dashboardApiProvider).sessions();
+  return ref.watch(dashboardApiProvider).councils();
 });
 
-final sessionProvider = FutureProvider.family<Map<String, dynamic>, String>(
-  (ref, sessionId) async {
-    return ref.watch(dashboardApiProvider).session(sessionId);
-  },
-);
+final councilProvider =
+    FutureProvider.family<Map<String, dynamic>, String>((ref, name) async {
+  return ref.watch(dashboardApiProvider).council(name);
+});
 
-class RoundKey {
-  const RoundKey(this.sessionId, this.roundId);
-  final String sessionId;
+final councilTopologyProvider =
+    FutureProvider.family<Map<String, dynamic>, String>((ref, name) async {
+  return ref.watch(dashboardApiProvider).councilTopology(name);
+});
+
+final councilSessionProvider =
+    FutureProvider.family<Map<String, dynamic>, String>((ref, name) async {
+  return ref.watch(dashboardApiProvider).councilSession(name);
+});
+
+class CouncilRoundKey {
+  const CouncilRoundKey(this.councilName, this.roundId);
+  final String councilName;
   final String roundId;
 
   @override
   bool operator ==(Object other) =>
-      other is RoundKey &&
-      other.sessionId == sessionId &&
+      other is CouncilRoundKey &&
+      other.councilName == councilName &&
       other.roundId == roundId;
 
   @override
-  int get hashCode => Object.hash(sessionId, roundId);
+  int get hashCode => Object.hash(councilName, roundId);
 }
 
-final roundProvider =
-    FutureProvider.family<Map<String, dynamic>, RoundKey>((ref, key) async {
-  return ref.watch(dashboardApiProvider).round(key.sessionId, key.roundId);
+final councilRoundProvider = FutureProvider.family<Map<String, dynamic>,
+    CouncilRoundKey>((ref, key) async {
+  return ref
+      .watch(dashboardApiProvider)
+      .councilRound(key.councilName, key.roundId);
 });
 
 class PerfQuery {
   const PerfQuery({
-    this.session,
-    this.roundId,
-    this.sort = 'cl2',
-    this.asc = false,
-    this.allVariants = false,
+    required this.councilName,
+    this.sort = 'test_pearson_r_mean',
+    this.ascending = false,
+    this.limit,
   });
-  final String? session;
-  final String? roundId;
+  final String councilName;
   final String sort;
-  final bool asc;
-  final bool allVariants;
+  final bool ascending;
+  final int? limit;
 
   @override
   bool operator ==(Object other) =>
       other is PerfQuery &&
-      other.session == session &&
-      other.roundId == roundId &&
+      other.councilName == councilName &&
       other.sort == sort &&
-      other.asc == asc &&
-      other.allVariants == allVariants;
+      other.ascending == ascending &&
+      other.limit == limit;
 
   @override
-  int get hashCode => Object.hash(session, roundId, sort, asc, allVariants);
+  int get hashCode => Object.hash(councilName, sort, ascending, limit);
 }
 
-final performanceProvider =
+final councilPerformanceProvider =
     FutureProvider.family<Map<String, dynamic>, PerfQuery>((ref, q) async {
-  return ref.watch(dashboardApiProvider).performanceTable(
-        session: q.session,
-        roundId: q.roundId,
+  return ref.watch(dashboardApiProvider).councilPerformance(
+        q.councilName,
         sort: q.sort,
-        asc: q.asc,
-        allVariants: q.allVariants,
+        ascending: q.ascending,
+        limit: q.limit,
       );
 });

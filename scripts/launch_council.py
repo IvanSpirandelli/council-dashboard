@@ -152,6 +152,7 @@ def main() -> None:
                 executor=seats["executor"],
                 empirical=seats["empirical"],
                 theoretical=seats["theoretical"],
+                oob=seats["oob"],
                 decider=seats["decider"],
                 critic=seats["critic"],
                 bundle=seats.get("bundle"),

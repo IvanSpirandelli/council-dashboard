@@ -38,7 +38,7 @@ def _stop_path(session_dir: Path) -> Path:
     return session_dir / STOP_FILE
 
 
-def _launch_path(session_dir: Path) -> Path:
+def launch_path(session_dir: Path) -> Path:
     return session_dir / LAUNCH_FILE
 
 
@@ -70,11 +70,11 @@ def write_launch_config(session_dir: Path, config: dict[str, Any]) -> None:
         {"cmd": [...], "cwd": "/abs/path", "env": {"K": "V"}}
     """
     session_dir.mkdir(parents=True, exist_ok=True)
-    _launch_path(session_dir).write_text(json.dumps(config, indent=2))
+    launch_path(session_dir).write_text(json.dumps(config, indent=2))
 
 
 def read_launch_config(session_dir: Path) -> dict[str, Any] | None:
-    p = _launch_path(session_dir)
+    p = launch_path(session_dir)
     if not p.exists():
         return None
     try:

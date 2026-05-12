@@ -49,48 +49,121 @@ class DashboardApi {
 
   Future<Map<String, dynamic>> health() => _getJson(_u('/health'));
 
-  Future<Map<String, dynamic>> topology() => _getJson(_u('/topology'));
+  // ── Council builder ───────────────────────────────────────────────
 
-  Future<List<Map<String, dynamic>>> sessions() async {
-    final list = await _getList(_u('/sessions'));
+  Future<List<Map<String, dynamic>>> councils() async {
+    final list = await _getList(_u('/councils'));
     return list.cast<Map<String, dynamic>>();
   }
 
-  Future<Map<String, dynamic>> session(String sessionId) =>
-      _getJson(_u('/sessions/$sessionId'));
+  Future<Map<String, dynamic>> council(String name) =>
+      _getJson(_u('/councils/$name'));
 
-  Future<Map<String, dynamic>> round(String sessionId, String roundId) =>
-      _getJson(_u('/sessions/$sessionId/rounds/$roundId'));
-
-  Future<Map<String, dynamic>> llmArtifact(
-      String sessionId, String roundId, String filename) {
-    return _getJson(_u('/sessions/$sessionId/rounds/$roundId/llm/$filename'));
+  Future<Map<String, dynamic>> putCouncil(
+      String name, Map<String, dynamic> body) async {
+    final res = await _client.put(
+      _u('/councils/$name'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'body': body}),
+    );
+    if (res.statusCode != 200) {
+      throw http.ClientException('PUT /councils/$name → ${res.statusCode}: ${res.body}');
+    }
+    return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
-  Future<Map<String, dynamic>> performanceTable({
-    String? session,
-    String? roundId,
-    String sort = 'cl2',
-    bool asc = false,
-    bool allVariants = false,
+  Future<Map<String, dynamic>> councilPreview(
+    String name,
+    String agentId, {
+    String? extraContext,
   }) {
-    return _getJson(_u('/performance-table', {
-      if (session != null) 'session': session,
-      if (roundId != null) 'round_id': roundId,
+    return _postJson(
+      _u('/councils/$name/agents/$agentId/preview'),
+      {'extra_context': extraContext},
+    );
+  }
+
+  Future<Map<String, dynamic>> councilPreviewFromBody(
+    String name,
+    String agentId,
+    Map<String, dynamic> body, {
+    String? extraContext,
+  }) {
+    return _postJson(
+      _u('/councils/$name/agents/$agentId/preview-from-body'),
+      {'body': body, 'extra_context': extraContext},
+    );
+  }
+
+  Future<Map<String, dynamic>> councilResource(
+          String name, String resourceName) =>
+      _getJson(_u('/councils/$name/resources/$resourceName'));
+
+  Future<Map<String, dynamic>> putCouncilResource(
+      String name, String resourceName, String body) async {
+    final res = await _client.put(
+      _u('/councils/$name/resources/$resourceName'),
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'body': body}),
+    );
+    if (res.statusCode != 200) {
+      throw http.ClientException(
+          'PUT /councils/$name/resources/$resourceName → ${res.statusCode}: ${res.body}');
+    }
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
+  // ── Council-centric session + performance ─────────────────────────
+
+  Future<Map<String, dynamic>> councilSession(String name) =>
+      _getJson(_u('/councils/$name/session'));
+
+  Future<Map<String, dynamic>> councilRound(String name, String roundId) =>
+      _getJson(_u('/councils/$name/rounds/$roundId'));
+
+  Future<Map<String, dynamic>> councilLlmArtifact(
+          String name, String roundId, String filename) =>
+      _getJson(_u('/councils/$name/rounds/$roundId/llm/$filename'));
+
+  Future<Map<String, dynamic>> councilTopology(String name) =>
+      _getJson(_u('/topology', {'council': name}));
+
+  Future<Map<String, dynamic>> councilPerformance(
+    String name, {
+    String sort = 'test_pearson_r_mean',
+    bool ascending = false,
+    int? limit,
+  }) {
+    return _getJson(_u('/councils/$name/performance', {
       'sort': sort,
-      'asc': asc,
-      'all_variants': allVariants,
+      'ascending': ascending,
+      if (limit != null) 'limit': limit,
     }));
   }
 
-  Future<Map<String, dynamic>> stop(String sessionId, {bool force = false}) =>
-      _postJson(_u('/sessions/$sessionId/stop', {'force': force}));
+  Future<Map<String, dynamic>> councilLaunchConfig(String name) =>
+      _getJson(_u('/councils/$name/launch-config'));
 
-  Future<Map<String, dynamic>> start(String sessionId) =>
-      _postJson(_u('/sessions/$sessionId/start'));
+  Future<Map<String, dynamic>> setCouncilLaunchConfig(
+    String name, {
+    required List<String> cmd,
+    String? cwd,
+    Map<String, String>? env,
+  }) =>
+      _postJson(_u('/councils/$name/launch-config'), {
+        'cmd': cmd,
+        if (cwd != null) 'cwd': cwd,
+        'env': env ?? <String, String>{},
+      });
 
-  Future<Map<String, dynamic>> clearStop(String sessionId) =>
-      _postJson(_u('/sessions/$sessionId/clear-stop'));
+  Future<Map<String, dynamic>> councilStart(String name) =>
+      _postJson(_u('/councils/$name/start'));
+
+  Future<Map<String, dynamic>> councilStop(String name, {bool force = false}) =>
+      _postJson(_u('/councils/$name/stop', {'force': force}));
+
+  Future<Map<String, dynamic>> councilClearStop(String name) =>
+      _postJson(_u('/councils/$name/clear-stop'));
 
   void close() => _client.close();
 }

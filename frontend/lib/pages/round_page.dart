@@ -8,9 +8,9 @@ import '../widgets/agent_graph.dart';
 import '../widgets/error_view.dart';
 
 class RoundPage extends ConsumerStatefulWidget {
-  const RoundPage({super.key, required this.sessionId, required this.roundId});
+  const RoundPage({super.key, required this.councilName, required this.roundId});
 
-  final String sessionId;
+  final String councilName;
   final String roundId;
 
   @override
@@ -22,28 +22,29 @@ class _RoundPageState extends ConsumerState<RoundPage> {
 
   @override
   Widget build(BuildContext context) {
-    final round = ref.watch(roundProvider(RoundKey(widget.sessionId, widget.roundId)));
-    final topology = ref.watch(topologyProvider);
+    final round = ref.watch(councilRoundProvider(
+        CouncilRoundKey(widget.councilName, widget.roundId)));
+    final topology = ref.watch(councilTopologyProvider(widget.councilName));
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('${widget.sessionId} · ${widget.roundId}'),
+        title: Text('${widget.councilName} · ${widget.roundId}'),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
-            onPressed: () => ref.invalidate(
-                roundProvider(RoundKey(widget.sessionId, widget.roundId))),
+            onPressed: () => ref.invalidate(councilRoundProvider(
+                CouncilRoundKey(widget.councilName, widget.roundId))),
           ),
         ],
       ),
       body: round.when(
         loading: () => const LoadingView(label: 'Loading round…'),
         error: (e, _) => ErrorView(e,
-            onRetry: () => ref.invalidate(
-                roundProvider(RoundKey(widget.sessionId, widget.roundId)))),
+            onRetry: () => ref.invalidate(councilRoundProvider(
+                CouncilRoundKey(widget.councilName, widget.roundId)))),
         data: (data) {
-          final overlay =
-              ((data['topology_overlay'] as Map?) ?? {}).cast<String, Map<String, dynamic>>();
+          final overlay = ((data['topology_overlay'] as Map?) ?? {})
+              .cast<String, Map<String, dynamic>>();
           final calls = ((data['llm_calls'] as List?) ?? [])
               .cast<Map<String, dynamic>>();
           return LayoutBuilder(builder: (ctx, c) {
@@ -81,7 +82,7 @@ class _RoundPageState extends ConsumerState<RoundPage> {
               ),
             );
             final ioPanel = _IOPanel(
-              sessionId: widget.sessionId,
+              councilName: widget.councilName,
               roundId: widget.roundId,
               calls: calls,
               focusedAgent: _focusedAgent,
@@ -93,15 +94,28 @@ class _RoundPageState extends ConsumerState<RoundPage> {
               return Row(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Expanded(flex: 5, child: Card(margin: const EdgeInsets.all(12), child: graphPanel)),
-                  Expanded(flex: 6, child: Card(margin: const EdgeInsets.fromLTRB(0, 12, 12, 12), child: ioPanel)),
+                  Expanded(
+                      flex: 5,
+                      child: Card(
+                          margin: const EdgeInsets.all(12), child: graphPanel)),
+                  Expanded(
+                      flex: 6,
+                      child: Card(
+                          margin: const EdgeInsets.fromLTRB(0, 12, 12, 12),
+                          child: ioPanel)),
                 ],
               );
             }
             return ListView(
               children: [
-                SizedBox(height: 380, child: Card(margin: const EdgeInsets.all(12), child: graphPanel)),
-                Card(margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 8), child: ioPanel),
+                SizedBox(
+                    height: 380,
+                    child: Card(
+                        margin: const EdgeInsets.all(12), child: graphPanel)),
+                Card(
+                    margin:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    child: ioPanel),
               ],
             );
           });
@@ -113,7 +127,7 @@ class _RoundPageState extends ConsumerState<RoundPage> {
 
 class _IOPanel extends ConsumerWidget {
   const _IOPanel({
-    required this.sessionId,
+    required this.councilName,
     required this.roundId,
     required this.calls,
     required this.focusedAgent,
@@ -122,7 +136,7 @@ class _IOPanel extends ConsumerWidget {
     required this.summary,
   });
 
-  final String sessionId;
+  final String councilName;
   final String roundId;
   final List<Map<String, dynamic>> calls;
   final String? focusedAgent;
@@ -148,13 +162,13 @@ class _IOPanel extends ConsumerWidget {
           Expanded(
             child: TabBarView(children: [
               _LLMCallsTab(
-                sessionId: sessionId,
+                councilName: councilName,
                 roundId: roundId,
                 calls: filtered,
               ),
               _CandidatesTab(
-                  candidates:
-                      ((summary['candidates'] as List?) ?? []).cast<Map<String, dynamic>>(),
+                  candidates: ((summary['candidates'] as List?) ?? [])
+                      .cast<Map<String, dynamic>>(),
                   rationale: summary['selection_rationale'] as String? ?? ''),
               _ResultsTab(runs: runs),
               _RawDecisionTab(decision: decision),
@@ -168,12 +182,12 @@ class _IOPanel extends ConsumerWidget {
 
 class _LLMCallsTab extends ConsumerStatefulWidget {
   const _LLMCallsTab({
-    required this.sessionId,
+    required this.councilName,
     required this.roundId,
     required this.calls,
   });
 
-  final String sessionId;
+  final String councilName;
   final String roundId;
   final List<Map<String, dynamic>> calls;
 
@@ -206,7 +220,7 @@ class _LLMCallsTabState extends ConsumerState<_LLMCallsTab> {
                 selected: selected,
                 title: Text('${c['agent']} t${c['turn']}'),
                 subtitle: Text(
-                    '${c['model']} · ≈${(c['approx_prompt_tokens'] as num) + (c['approx_response_tokens'] as num)} tok · ${(c['wall_seconds'] as num).toStringAsFixed(1)}s'),
+                    '${c['model']} · ≈${_kfmt((c['approx_prompt_tokens'] as num) + (c['approx_response_tokens'] as num))} tok · ${(c['wall_seconds'] as num).toStringAsFixed(0)}s'),
                 onTap: () => _select(c),
               );
             },
@@ -215,7 +229,8 @@ class _LLMCallsTabState extends ConsumerState<_LLMCallsTab> {
         const VerticalDivider(width: 1),
         Expanded(
           child: _selected == null
-              ? const Center(child: Text('Select a call to view its prompt + response.'))
+              ? const Center(
+                  child: Text('Select a call to view its prompt + response.'))
               : _detailView(),
         ),
       ],
@@ -240,8 +255,8 @@ class _LLMCallsTabState extends ConsumerState<_LLMCallsTab> {
                 Text('model: ${_selected!['model']}'),
                 Text('turn: ${_selected!['turn']}'),
                 Text(
-                    '≈ tokens: ${(_selected!['approx_prompt_tokens'] as num) + (_selected!['approx_response_tokens'] as num)}'),
-                Text('wall: ${(_selected!['wall_seconds'] as num).toStringAsFixed(1)}s'),
+                    '≈ tokens: ${_kfmt((_selected!['approx_prompt_tokens'] as num) + (_selected!['approx_response_tokens'] as num))}'),
+                Text('wall: ${(_selected!['wall_seconds'] as num).toStringAsFixed(0)}s'),
                 if (_selected!['exact_usage'] != null)
                   Text('exact_usage: ${_selected!['exact_usage']}'),
               ],
@@ -271,8 +286,10 @@ class _LLMCallsTabState extends ConsumerState<_LLMCallsTab> {
     try {
       final promptName = (c['prompt_path'] as String).split('/').last;
       final responseName = (c['response_path'] as String).split('/').last;
-      final p = await api.llmArtifact(widget.sessionId, widget.roundId, promptName);
-      final r = await api.llmArtifact(widget.sessionId, widget.roundId, responseName);
+      final p = await api.councilLlmArtifact(
+          widget.councilName, widget.roundId, promptName);
+      final r = await api.councilLlmArtifact(
+          widget.councilName, widget.roundId, responseName);
       setState(() {
         _promptBody = p['body'] as String;
         _responseBody = _prettyJson(r['body'] as String);
@@ -292,6 +309,12 @@ class _LLMCallsTabState extends ConsumerState<_LLMCallsTab> {
     } catch (_) {
       return s;
     }
+  }
+
+  String _kfmt(num v) {
+    if (v >= 1000000) return '${(v / 1000000).toStringAsFixed(1)}M';
+    if (v >= 1000) return '${(v / 1000).round()}k';
+    return v.toString();
   }
 }
 
@@ -377,7 +400,8 @@ class _CandidateCard extends StatelessWidget {
               if (c['promoted'] == true)
                 Chip(
                   label: const Text('promoted'),
-                  backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+                  backgroundColor:
+                      Theme.of(context).colorScheme.primaryContainer,
                 ),
               const Spacer(),
               SelectableText('id: ${c['experiment_id']}',
@@ -395,7 +419,10 @@ class _CandidateCard extends StatelessWidget {
             Wrap(
               spacing: 4,
               runSpacing: 4,
-              children: [for (final f in feats) Chip(label: Text(f), visualDensity: VisualDensity.compact)],
+              children: [
+                for (final f in feats)
+                  Chip(label: Text(f), visualDensity: VisualDensity.compact)
+              ],
             ),
             if (flags.isNotEmpty) ...[
               const SizedBox(height: 6),
