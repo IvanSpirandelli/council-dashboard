@@ -90,17 +90,16 @@ class _AgentGraphState extends State<AgentGraph> {
   }
 
   /// Compute the midpoint + perpendicular offset for every edge label.
-  /// Edges between the same node pair (regardless of direction) get
-  /// offset on opposite sides of the line so the labels don't stack —
-  /// without this the decider↔critic round-trip rendered both labels
-  /// on top of each other at the same midpoint.
+  ///
+  /// Each label sits 18px to the LEFT of its directed edge (perpendicular
+  /// to the direction, CCW). For a bidirectional pair like
+  /// decider↔master_critic, the two directions have opposite unit
+  /// vectors, so their perpendiculars are opposite too — the two labels
+  /// end up on opposite sides of the line without any pair-counting
+  /// bookkeeping. The previous attempt also flipped a per-pair sign,
+  /// which double-flipped and put both labels back on the same spot.
   List<_LabelLayout> _layoutEdgeLabels(Map<String, Size> sizes) {
-    final pairCount = <String, int>{};
-    for (final e in widget.edges) {
-      final key = _pairKey(e['src'] as String, e['dst'] as String);
-      pairCount[key] = (pairCount[key] ?? 0) + 1;
-    }
-    final pairSeen = <String, int>{};
+    const double offset = 18.0;
     final out = <_LabelLayout>[];
     for (final e in widget.edges) {
       final src = e['src'] as String;
@@ -118,29 +117,14 @@ class _AgentGraphState extends State<AgentGraph> {
       final aClip = a + unit * _clipDist(unit, aSize);
       final bClip = b - unit * _clipDist(unit, bSize);
       final mid = (aClip + bClip) / 2;
-      final perp = Offset(-unit.dy, unit.dx);
-
-      final key = _pairKey(src, dst);
-      final idx = pairSeen[key] ?? 0;
-      pairSeen[key] = idx + 1;
-      final pairN = pairCount[key]!;
-      // Single edge: small lift off the line. Bidirectional: opposite
-      // sides so the two labels can't overlap.
-      // 14px lifted a single label nicely off a line, but with a
-      // bidirectional pair the two chip boxes (~24px tall each) still
-      // overlapped at ±14 centers. 24px puts ~48px between centers,
-      // leaving a comfortable gap.
-      final sign = pairN > 1 ? (idx == 0 ? 1.0 : -1.0) : 1.0;
-      final offset = pairN > 1 ? 24.0 : 14.0;
-      final pos = mid + perp * offset * sign;
-
-      out.add(_LabelLayout(text: e['label'] as String, pos: pos));
+      final perpLeft = Offset(-unit.dy, unit.dx);
+      out.add(_LabelLayout(
+        text: e['label'] as String,
+        pos: mid + perpLeft * offset,
+      ));
     }
     return out;
   }
-
-  String _pairKey(String a, String b) =>
-      a.compareTo(b) <= 0 ? '$a|$b' : '$b|$a';
 
   double _clipDist(Offset u, Size tile) {
     final ax = u.dx.abs();
