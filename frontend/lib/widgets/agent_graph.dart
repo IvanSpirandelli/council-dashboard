@@ -89,17 +89,16 @@ class _AgentGraphState extends State<AgentGraph> {
     });
   }
 
-  /// Compute the midpoint + perpendicular offset for every edge label.
-  ///
-  /// Each label sits 18px to the LEFT of its directed edge (perpendicular
-  /// to the direction, CCW). For a bidirectional pair like
-  /// decider↔master_critic, the two directions have opposite unit
-  /// vectors, so their perpendiculars are opposite too — the two labels
-  /// end up on opposite sides of the line without any pair-counting
-  /// bookkeeping. The previous attempt also flipped a per-pair sign,
-  /// which double-flipped and put both labels back on the same spot.
+  /// Compute the anchor point + perpendicular direction for every edge
+  /// label. The chip is then rendered so that its *inner edge* (the side
+  /// facing the line) sits at the anchor, with the rest of the chip
+  /// extending outward in the perpendicular direction. This is what
+  /// stops the decider↔critic chips overlapping — their inner edges
+  /// pin to the same line but on opposite sides, so the chip bodies
+  /// can't collide regardless of how wide the text is.
   List<_LabelLayout> _layoutEdgeLabels(Map<String, Size> sizes) {
-    const double offset = 18.0;
+    // Tiny breathing room between chip and line.
+    const double gap = 3.0;
     final out = <_LabelLayout>[];
     for (final e in widget.edges) {
       final src = e['src'] as String;
@@ -120,7 +119,8 @@ class _AgentGraphState extends State<AgentGraph> {
       final perpLeft = Offset(-unit.dy, unit.dx);
       out.add(_LabelLayout(
         text: e['label'] as String,
-        pos: mid + perpLeft * offset,
+        anchor: mid + perpLeft * gap,
+        perp: perpLeft,
       ));
     }
     return out;
@@ -344,9 +344,16 @@ class _EdgePainter extends CustomPainter {
 }
 
 class _LabelLayout {
-  const _LabelLayout({required this.text, required this.pos});
+  const _LabelLayout({
+    required this.text,
+    required this.anchor,
+    required this.perp,
+  });
   final String text;
-  final Offset pos;
+  // The anchor is where the chip's inner edge (the side facing the
+  // line) sits. The chip body extends outward in [perp]'s direction.
+  final Offset anchor;
+  final Offset perp;
 }
 
 class _EdgeLabelChip extends StatelessWidget {
@@ -355,11 +362,24 @@ class _EdgeLabelChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // FractionalTranslation shifts the chip by (tx * width, ty * height).
+    // (0,0) keeps top-left at the anchor; (-1, -1) puts bottom-right at
+    // the anchor; (-0.5, -0.5) centers. To anchor the inner edge to the
+    // line, we want the chip's edge facing -perp at the anchor — i.e.
+    // the chip extends in +perp from there. For a unit perp (px, py),
+    // tx = -0.5 + 0.5 * px and ty = -0.5 + 0.5 * py produces:
+    //   perp = ( 1,  0)  →  (tx, ty) = ( 0.0, -0.5)  ← left-middle on anchor
+    //   perp = (-1,  0)  →  (tx, ty) = (-1.0, -0.5)  ← right-middle
+    //   perp = ( 0,  1)  →  (tx, ty) = (-0.5,  0.0)  ← top-middle
+    //   perp = ( 0, -1)  →  (tx, ty) = (-0.5, -1.0)  ← bottom-middle
+    // and a smooth interpolation for diagonal perps.
+    final tx = -0.5 + 0.5 * label.perp.dx;
+    final ty = -0.5 + 0.5 * label.perp.dy;
     return Positioned(
-      left: label.pos.dx,
-      top: label.pos.dy,
+      left: label.anchor.dx,
+      top: label.anchor.dy,
       child: FractionalTranslation(
-        translation: const Offset(-0.5, -0.5),
+        translation: Offset(tx, ty),
         child: IgnorePointer(
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
