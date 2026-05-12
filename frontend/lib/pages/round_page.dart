@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../api/providers.dart';
 import '../widgets/error_view.dart';
 import '../widgets/feature_chip.dart';
+import '../widgets/results_table.dart';
 
 class RoundPage extends ConsumerStatefulWidget {
   const RoundPage({super.key, required this.councilName, required this.roundId});
@@ -650,41 +651,21 @@ class _ResultsTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (runs.isEmpty) {
-      return const Center(child: Text('No executed runs in this round.'));
-    }
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: SingleChildScrollView(
-        child: DataTable(
-          columns: const [
-            DataColumn(label: Text('experiment_id')),
-            DataColumn(label: Text('seeds')),
-            DataColumn(label: Text('CL2 r')),
-            DataColumn(label: Text('BDB r')),
-            DataColumn(label: Text('EGFR r')),
-            DataColumn(label: Text('MPro r')),
-            DataColumn(label: Text('features')),
-            DataColumn(label: Text('architecture')),
-          ],
-          rows: [
-            for (final r in runs)
-              DataRow(cells: [
-                DataCell(Text(r['experiment_id']?.toString() ?? '—')),
-                DataCell(Text(_seeds(r))),
-                DataCell(_metricCell(_metric(r, 'test_pearson_r'))),
-                DataCell(_metricCell(_metric(r, 'bdb2020_pearson_r'))),
-                DataCell(_metricCell(_metric(r, 'egfr_pearson_r'))),
-                DataCell(_metricCell(_metric(r, 'mpro_pearson_r'))),
-                DataCell(FeatureChipList(
-                  featureIds: _featureIds(r),
-                  maxWidth: 420,
-                )),
-                DataCell(Text(_architecture(r))),
-              ]),
-          ],
-        ),
-      ),
+    return ResultsTable(
+      idLabel: 'experiment_id',
+      emptyMessage: 'No executed runs in this round.',
+      rows: [
+        for (final r in runs)
+          ResultRow(
+            id: r['experiment_id']?.toString() ?? '—',
+            cl2: _metric(r, 'test_pearson_r'),
+            bdb: _metric(r, 'bdb2020_pearson_r'),
+            egfr: _metric(r, 'egfr_pearson_r'),
+            mpro: _metric(r, 'mpro_pearson_r'),
+            featureIds: _featureIds(r),
+            architecture: _architecture(r),
+          ),
+      ],
     );
   }
 
@@ -717,21 +698,6 @@ class _ResultsTab extends StatelessWidget {
       return '$hiddenStr · d=${dropout.toStringAsFixed(2)}';
     }
     return hiddenStr;
-  }
-
-  String _seeds(Map<String, dynamic> r) {
-    final m = (r['metrics'] as Map?)?.cast<String, dynamic>();
-    final ok = m?['n_seeds_succeeded'];
-    final total = m?['n_seeds_total'];
-    if (ok == null && total == null) return '1/1';
-    String fmt(Object? v) =>
-        v is num ? v.toInt().toString() : (v?.toString() ?? '?');
-    return '${fmt(ok)}/${fmt(total)}';
-  }
-
-  Widget _metricCell(num? v) {
-    if (v == null) return const Text('—');
-    return Text(v.toStringAsFixed(4));
   }
 }
 

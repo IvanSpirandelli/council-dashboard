@@ -6,7 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import '../api/providers.dart';
 import '../widgets/error_view.dart';
-import '../widgets/feature_chip.dart';
+import '../widgets/results_table.dart';
 
 /// Per-council home: performance preview, edit-council, continue-tasks.
 ///
@@ -146,45 +146,25 @@ class _PerfRows extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
-      child: DataTable(
-        columnSpacing: 16,
-        columns: const [
-          DataColumn(label: Text('#')),
-          DataColumn(label: Text('fingerprint')),
-          DataColumn(label: Text('CL2 r')),
-          DataColumn(label: Text('BDB r')),
-          DataColumn(label: Text('EGFR r')),
-          DataColumn(label: Text('MPro r')),
-          DataColumn(label: Text('features')),
-          DataColumn(label: Text('architecture')),
-        ],
-        rows: [
-          for (var i = 0; i < rows.length; i++)
-            DataRow(cells: [
-              DataCell(Text('${i + 1}')),
-              DataCell(SelectableText(
-                  rows[i]['fingerprint']?.toString() ?? '')),
-              DataCell(_metric(rows[i]['test_pearson_r_mean'])),
-              DataCell(_metric(rows[i]['bdb2020_pearson_r_mean'])),
-              DataCell(_metric(rows[i]['egfr_pearson_r_mean'])),
-              DataCell(_metric(rows[i]['mpro_pearson_r_mean'])),
-              DataCell(FeatureChipList(
-                featureIds: _splitFeatureIds(rows[i]['feature_ids']),
-                maxWidth: 420,
-              )),
-              DataCell(Text(rows[i]['hidden']?.toString() ?? '—')),
-            ]),
-        ],
-      ),
+    return ResultsTable(
+      idLabel: 'fingerprint',
+      emptyMessage: 'No models in corpus yet.',
+      rows: [
+        for (final r in rows)
+          ResultRow(
+            id: r['fingerprint']?.toString() ?? '',
+            cl2: _num(r['test_pearson_r_mean']),
+            bdb: _num(r['bdb2020_pearson_r_mean']),
+            egfr: _num(r['egfr_pearson_r_mean']),
+            mpro: _num(r['mpro_pearson_r_mean']),
+            featureIds: _splitFeatureIds(r['feature_ids']),
+            architecture: r['hidden']?.toString() ?? '—',
+          ),
+      ],
     );
   }
 
-  Widget _metric(Object? v) {
-    if (v is num) return Text(v.toStringAsFixed(4));
-    return const Text('—');
-  }
+  num? _num(Object? v) => v is num ? v : null;
 
   // performance.py serializes feature_ids as a comma-joined string, not
   // a list — split here so FeatureChipList can render pastel pills.
