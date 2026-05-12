@@ -678,7 +678,7 @@ class _ResultsTab extends StatelessWidget {
                 DataCell(_metricCell(_metric(r, 'mpro_pearson_r'))),
                 DataCell(FeatureChipList(
                   featureIds: _featureIds(r),
-                  maxWidth: 320,
+                  maxWidth: 640,
                 )),
                 DataCell(Text(_architecture(r))),
               ]),
