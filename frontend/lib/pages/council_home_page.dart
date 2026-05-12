@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -6,28 +8,55 @@ import '../api/providers.dart';
 import '../widgets/error_view.dart';
 
 /// Per-council home: performance preview, edit-council, continue-tasks.
-class CouncilHomePage extends ConsumerWidget {
+///
+/// Auto-polls the session endpoint every 2s while mounted so the
+/// Running/Idle badge stays current; the perf provider is only
+/// refreshed on manual button press (it sorts the whole model corpus
+/// and is comparatively expensive).
+class CouncilHomePage extends ConsumerStatefulWidget {
   const CouncilHomePage({super.key, required this.councilName});
 
   final String councilName;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<CouncilHomePage> createState() => _CouncilHomePageState();
+}
+
+class _CouncilHomePageState extends ConsumerState<CouncilHomePage> {
+  Timer? _pollTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (!mounted) return;
+      ref.invalidate(councilSessionProvider(widget.councilName));
+    });
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final perf = ref.watch(councilPerformanceProvider(
-      PerfQuery(councilName: councilName, limit: 10),
+      PerfQuery(councilName: widget.councilName, limit: 10),
     ));
-    final session = ref.watch(councilSessionProvider(councilName));
+    final session = ref.watch(councilSessionProvider(widget.councilName));
     return Scaffold(
       appBar: AppBar(
-        title: Text(councilName),
+        title: Text(widget.councilName),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: () {
               ref.invalidate(councilPerformanceProvider(
-                PerfQuery(councilName: councilName, limit: 10),
+                PerfQuery(councilName: widget.councilName, limit: 10),
               ));
-              ref.invalidate(councilSessionProvider(councilName));
+              ref.invalidate(councilSessionProvider(widget.councilName));
             },
           ),
         ],
@@ -35,11 +64,11 @@ class CouncilHomePage extends ConsumerWidget {
       body: LayoutBuilder(builder: (ctx, c) {
         final wide = c.maxWidth > 900;
         final perfTile = _PerformanceTile(
-          councilName: councilName,
+          councilName: widget.councilName,
           perf: perf,
         );
         final actionTiles = _ActionTiles(
-          councilName: councilName,
+          councilName: widget.councilName,
           session: session,
         );
         if (wide) {

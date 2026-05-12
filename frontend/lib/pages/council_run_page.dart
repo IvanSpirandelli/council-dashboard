@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -9,23 +11,49 @@ import '../widgets/launch_config_panel.dart';
 
 /// Detailed view of a council's canonical session: rounds, topology
 /// overlay, start/stop controls.
-class CouncilRunPage extends ConsumerWidget {
+///
+/// Auto-polls the session endpoint every 2s while mounted; the endpoint
+/// is cheap (file reads + a `kill -0` liveness check) so the load is
+/// trivial. Manual refresh stays as a fallback in the app bar.
+class CouncilRunPage extends ConsumerStatefulWidget {
   const CouncilRunPage({super.key, required this.councilName});
 
   final String councilName;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final session = ref.watch(councilSessionProvider(councilName));
-    final topology = ref.watch(councilTopologyProvider(councilName));
+  ConsumerState<CouncilRunPage> createState() => _CouncilRunPageState();
+}
+
+class _CouncilRunPageState extends ConsumerState<CouncilRunPage> {
+  Timer? _pollTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    _pollTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (!mounted) return;
+      ref.invalidate(councilSessionProvider(widget.councilName));
+    });
+  }
+
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final session = ref.watch(councilSessionProvider(widget.councilName));
+    final topology = ref.watch(councilTopologyProvider(widget.councilName));
     return Scaffold(
       appBar: AppBar(
-        title: Text('$councilName · run'),
+        title: Text('${widget.councilName} · run'),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: () =>
-                ref.invalidate(councilSessionProvider(councilName)),
+                ref.invalidate(councilSessionProvider(widget.councilName)),
           ),
         ],
       ),
@@ -33,16 +61,16 @@ class CouncilRunPage extends ConsumerWidget {
         loading: () => const LoadingView(label: 'Loading session…'),
         error: (e, _) => ErrorView(e,
             onRetry: () =>
-                ref.invalidate(councilSessionProvider(councilName))),
+                ref.invalidate(councilSessionProvider(widget.councilName))),
         data: (data) => _Body(
-          councilName: councilName,
+          councilName: widget.councilName,
           summary: data,
           topology: topology,
           onStop: () async {
             final api = ref.read(dashboardApiProvider);
             try {
-              await api.councilStop(councilName);
-              ref.invalidate(councilSessionProvider(councilName));
+              await api.councilStop(widget.councilName);
+              ref.invalidate(councilSessionProvider(widget.councilName));
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   const SnackBar(
