@@ -7,6 +7,16 @@ import 'package:flutter/material.dart';
 /// Tiles start at normalized (x, y) coordinates from the backend's
 /// topology.py and can be dragged. Tap fires [onAgentTap]. Edges are
 /// repainted as tiles move.
+/// Imperative handle for the parent page to read the current layout.
+class AgentGraphController {
+  AgentGraphState? _state;
+
+  /// Returns the latest node positions normalized to 0–1 by the current
+  /// container size, or null if the graph hasn't been laid out yet.
+  Map<String, ({double x, double y})>? snapshotNormalized() =>
+      _state?.snapshotNormalized();
+}
+
 class AgentGraph extends StatefulWidget {
   const AgentGraph({
     super.key,
@@ -14,15 +24,17 @@ class AgentGraph extends StatefulWidget {
     required this.edges,
     required this.overlay,
     this.onAgentTap,
+    this.controller,
   });
 
   final List<Map<String, dynamic>> nodes;
   final List<Map<String, dynamic>> edges;
   final Map<String, Map<String, dynamic>> overlay;
   final void Function(String agentId)? onAgentTap;
+  final AgentGraphController? controller;
 
   @override
-  State<AgentGraph> createState() => _AgentGraphState();
+  State<AgentGraph> createState() => AgentGraphState();
 }
 
 const double _tileW = 168.0;
@@ -37,8 +49,43 @@ const Color _edgeColor = Color(0xCCFFFFFF);
 Size _sizeFor(bool isLLM) =>
     isLLM ? const Size(_tileW, _tileH) : const Size(_tileWNon, _tileHNon);
 
-class _AgentGraphState extends State<AgentGraph> {
+class AgentGraphState extends State<AgentGraph> {
   final Map<String, Offset> _positions = {};
+  Size _lastSize = Size.zero;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller?._state = this;
+  }
+
+  @override
+  void didUpdateWidget(AgentGraph oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.controller != widget.controller) {
+      oldWidget.controller?._state = null;
+      widget.controller?._state = this;
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.controller?._state = null;
+    super.dispose();
+  }
+
+  /// Latest positions normalized against the most-recently-laid-out size.
+  /// Returns null until the widget has been laid out at least once.
+  Map<String, ({double x, double y})>? snapshotNormalized() {
+    if (_lastSize.width <= 0 || _lastSize.height <= 0) return null;
+    return {
+      for (final entry in _positions.entries)
+        entry.key: (
+          x: entry.value.dx / _lastSize.width,
+          y: entry.value.dy / _lastSize.height,
+        ),
+    };
+  }
 
   void _ensurePositions(Size size) {
     final sized = size.width > 0 && size.height > 0;
@@ -58,6 +105,7 @@ class _AgentGraphState extends State<AgentGraph> {
   Widget build(BuildContext context) {
     return LayoutBuilder(builder: (context, constraints) {
       final size = Size(constraints.maxWidth, constraints.maxHeight);
+      _lastSize = size;
       _ensurePositions(size);
       final maxTokens = _maxTokens();
 
@@ -66,7 +114,8 @@ class _AgentGraphState extends State<AgentGraph> {
           n['id'] as String: _sizeFor(n['kind'] == 'llm'),
       };
 
-      final labels = _layoutEdgeLabels(sizes);
+      final lateral = _edgeLateralOffsets();
+      final labels = _layoutEdgeLabels(sizes, lateral);
 
       return Container(
         color: _bgColor,
@@ -78,6 +127,7 @@ class _AgentGraphState extends State<AgentGraph> {
                   edges: widget.edges,
                   positions: Map<String, Offset>.from(_positions),
                   sizes: sizes,
+                  lateralOffsets: lateral,
                 ),
               ),
             ),
@@ -89,6 +139,34 @@ class _AgentGraphState extends State<AgentGraph> {
     });
   }
 
+  /// Per-edge lateral offset so that a pair of edges in opposite
+  /// directions between the same two nodes (e.g. decider↔master_critic)
+  /// renders as two parallel arrows instead of one line drawn twice.
+  Map<int, double> _edgeLateralOffsets() {
+    const double sep = 9.0;
+    final out = <int, double>{};
+    final pairs = <String, int>{};
+    for (var i = 0; i < widget.edges.length; i++) {
+      final src = widget.edges[i]['src'] as String;
+      final dst = widget.edges[i]['dst'] as String;
+      pairs['$src→$dst'] = i;
+    }
+    final used = <int>{};
+    for (var i = 0; i < widget.edges.length; i++) {
+      if (used.contains(i)) continue;
+      final src = widget.edges[i]['src'] as String;
+      final dst = widget.edges[i]['dst'] as String;
+      final reverseIdx = pairs['$dst→$src'];
+      if (reverseIdx != null && reverseIdx != i) {
+        // Both edges shift to their own perpLeft side by sep/2.
+        out[i] = sep / 2;
+        out[reverseIdx] = sep / 2;
+        used..add(i)..add(reverseIdx);
+      }
+    }
+    return out;
+  }
+
   /// Compute the anchor point + perpendicular direction for every edge
   /// label. The chip is then rendered so that its *inner edge* (the side
   /// facing the line) sits at the anchor, with the rest of the chip
@@ -96,11 +174,13 @@ class _AgentGraphState extends State<AgentGraph> {
   /// stops the decider↔critic chips overlapping — their inner edges
   /// pin to the same line but on opposite sides, so the chip bodies
   /// can't collide regardless of how wide the text is.
-  List<_LabelLayout> _layoutEdgeLabels(Map<String, Size> sizes) {
+  List<_LabelLayout> _layoutEdgeLabels(
+      Map<String, Size> sizes, Map<int, double> lateral) {
     // Tiny breathing room between chip and line.
     const double gap = 3.0;
     final out = <_LabelLayout>[];
-    for (final e in widget.edges) {
+    for (var i = 0; i < widget.edges.length; i++) {
+      final e = widget.edges[i];
       final src = e['src'] as String;
       final dst = e['dst'] as String;
       final a = _positions[src];
@@ -113,10 +193,11 @@ class _AgentGraphState extends State<AgentGraph> {
       final len = dir.distance;
       if (len <= 0) continue;
       final unit = dir / len;
-      final aClip = a + unit * _clipDist(unit, aSize);
-      final bClip = b - unit * _clipDist(unit, bSize);
-      final mid = (aClip + bClip) / 2;
       final perpLeft = Offset(-unit.dy, unit.dx);
+      final shift = perpLeft * (lateral[i] ?? 0);
+      final aClip = a + unit * _clipDist(unit, aSize) + shift;
+      final bClip = b - unit * _clipDist(unit, bSize) + shift;
+      final mid = (aClip + bClip) / 2;
       out.add(_LabelLayout(
         text: e['label'] as String,
         anchor: mid + perpLeft * gap,
@@ -144,11 +225,17 @@ class _AgentGraphState extends State<AgentGraph> {
     final calls = (ov?['calls'] as num?)?.toInt() ?? 0;
     final wall = (ov?['wall_seconds'] as num?)?.toDouble() ?? 0.0;
     final active = (ov?['active'] as bool?) ?? false;
+    final done = (ov?['done'] as bool?) ?? false;
     final isLLM = n['kind'] == 'llm';
     final tileSize = _sizeFor(isLLM);
     final hw = tileSize.width / 2;
     final hh = tileSize.height / 2;
-    final (statusColor, statusText) = _statusFor(active, calls, isLLM);
+    // Prefer the backend-computed lifecycle string when present; fall back
+    // to local derivation for old payloads.
+    final state = (ov?['state'] as String?) ??
+        _localState(isLLM: isLLM, active: active, calls: calls, done: done);
+    final statusColor = _colorForState(state);
+    final icon = isLLM ? Icons.smart_toy_outlined : Icons.code;
 
     return Positioned(
       left: pos.dx - hw,
@@ -192,16 +279,25 @@ class _AgentGraphState extends State<AgentGraph> {
                     color: statusColor,
                     padding: const EdgeInsets.symmetric(
                         horizontal: 6, vertical: 1),
-                    child: Text(
-                      statusText,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 10,
-                        fontWeight: FontWeight.w600,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      textAlign: TextAlign.center,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(icon, size: 11, color: Colors.white),
+                        const SizedBox(width: 4),
+                        Flexible(
+                          child: Text(
+                            state,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                   Expanded(
@@ -249,16 +345,32 @@ class _AgentGraphState extends State<AgentGraph> {
     );
   }
 
-  (Color, String) _statusFor(bool active, int calls, bool isLLM) {
+  String _localState({
+    required bool isLLM,
+    required bool active,
+    required int calls,
+    required bool done,
+  }) {
     if (isLLM) {
-      if (active) return (const Color(0xFF2196F3), 'working');
-      if (calls > 0) return (const Color(0xFF4CAF50), 'done');
-      return (const Color(0xFF757575), 'idle');
+      if (active) return 'working';
+      if (calls > 0) return 'done';
+      return 'idle';
     }
-    // Code node (validator, executor): plain 'code' when idle, 'running'
-    // when the backend marks it active (today only the executor surfaces).
-    if (active) return (const Color(0xFF2196F3), 'running');
-    return (const Color(0xFF607D8B), 'code');
+    if (active) return 'running';
+    if (done) return 'done';
+    return 'idle';
+  }
+
+  Color _colorForState(String state) {
+    switch (state) {
+      case 'working':
+      case 'running':
+        return const Color(0xFF2196F3);
+      case 'done':
+        return const Color(0xFF4CAF50);
+      default:
+        return const Color(0xFF757575);
+    }
   }
 
   double _maxTokens() {
@@ -282,15 +394,20 @@ class _EdgePainter extends CustomPainter {
     required this.edges,
     required this.positions,
     required this.sizes,
+    required this.lateralOffsets,
   });
 
   final List<Map<String, dynamic>> edges;
   final Map<String, Offset> positions;
   final Map<String, Size> sizes;
+  // Edge index → perpendicular shift (px) so paired reverse edges render
+  // as two parallel arrows instead of one overlapping line.
+  final Map<int, double> lateralOffsets;
 
   @override
   void paint(Canvas canvas, Size size) {
-    for (final e in edges) {
+    for (var i = 0; i < edges.length; i++) {
+      final e = edges[i];
       final srcId = e['src'] as String;
       final dstId = e['dst'] as String;
       final a = positions[srcId];
@@ -298,18 +415,30 @@ class _EdgePainter extends CustomPainter {
       if (a == null || b == null) continue;
       final aSize = sizes[srcId] ?? const Size(_tileW, _tileH);
       final bSize = sizes[dstId] ?? const Size(_tileW, _tileH);
-      _drawEdge(canvas, a, b, aSize, bSize, e['label'] as String);
+      _drawEdge(
+        canvas, a, b, aSize, bSize, e['label'] as String,
+        lateral: lateralOffsets[i] ?? 0,
+      );
     }
   }
 
   void _drawEdge(
-      Canvas canvas, Offset a, Offset b, Size aSize, Size bSize, String label) {
+    Canvas canvas,
+    Offset a,
+    Offset b,
+    Size aSize,
+    Size bSize,
+    String label, {
+    required double lateral,
+  }) {
     final dir = b - a;
     final len = dir.distance;
     if (len <= 0) return;
     final unit = dir / len;
-    final aClip = a + unit * _clipDist(unit, aSize);
-    final bClip = b - unit * _clipDist(unit, bSize);
+    final perpLeft = Offset(-unit.dy, unit.dx);
+    final shift = perpLeft * lateral;
+    final aClip = a + unit * _clipDist(unit, aSize) + shift;
+    final bClip = b - unit * _clipDist(unit, bSize) + shift;
 
     canvas.drawLine(
       aClip,
@@ -319,10 +448,9 @@ class _EdgePainter extends CustomPainter {
         ..strokeWidth = 1.5,
     );
 
-    final perp = Offset(-unit.dy, unit.dx);
     final back = bClip - unit * 9;
-    final left = back + perp * 6;
-    final right = back - perp * 6;
+    final left = back + perpLeft * 6;
+    final right = back - perpLeft * 6;
     final path = Path()
       ..moveTo(bClip.dx, bClip.dy)
       ..lineTo(left.dx, left.dy)

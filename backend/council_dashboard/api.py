@@ -99,13 +99,13 @@ def topology(council: str) -> dict[str, Any]:
         raise HTTPException(404, str(e))
 
 
-def _topology_valid_ids(council: str) -> set[str]:
-    """Set of valid agent ids for filtering ``topology_overlay``."""
+def _topology_nodes(council: str) -> list[dict[str, Any]]:
+    """Return the topology's node list (with id + kind) for overlay computation."""
     try:
         topo = councils_mod.topology(settings.councils_root, council)
     except FileNotFoundError:
-        return set()
-    return {n.get("id") for n in topo.get("nodes", []) if n.get("id")}
+        return []
+    return [n for n in topo.get("nodes", []) if n.get("id")]
 
 
 # ── Council builder ──────────────────────────────────────────────────
@@ -215,7 +215,7 @@ def council_session(name: str) -> dict[str, Any]:
         }
     summary["council"] = name
     summary["topology_overlay"] = ingest.topology_overlay(
-        summary, _topology_valid_ids(name)
+        summary, _topology_nodes(name)
     )
     return summary
 
@@ -227,7 +227,7 @@ def council_round(name: str, round_id: str) -> dict[str, Any]:
     if detail is None:
         raise HTTPException(404, f"unknown round: {name}/{round_id}")
     detail["topology_overlay"] = ingest.topology_overlay(
-        detail["summary"], _topology_valid_ids(name)
+        detail["summary"], _topology_nodes(name)
     )
     return detail
 

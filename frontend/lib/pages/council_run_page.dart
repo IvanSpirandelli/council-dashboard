@@ -27,6 +27,7 @@ class CouncilRunPage extends ConsumerStatefulWidget {
 
 class _CouncilRunPageState extends ConsumerState<CouncilRunPage> {
   Timer? _pollTimer;
+  final AgentGraphController _graphController = AgentGraphController();
 
   @override
   void initState() {
@@ -41,6 +42,47 @@ class _CouncilRunPageState extends ConsumerState<CouncilRunPage> {
   void dispose() {
     _pollTimer?.cancel();
     super.dispose();
+  }
+
+  Future<void> _saveLayout() async {
+    final positions = _graphController.snapshotNormalized();
+    if (positions == null || positions.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Graph not laid out yet.')),
+      );
+      return;
+    }
+    final api = ref.read(dashboardApiProvider);
+    try {
+      final council = await api.council(widget.councilName);
+      final manifest = Map<String, dynamic>.from(council['manifest'] as Map);
+      final topology = Map<String, dynamic>.from(
+          (manifest['topology'] as Map?) ?? {});
+      final nodes = ((topology['nodes'] as List?) ?? [])
+          .map((n) => Map<String, dynamic>.from(n as Map))
+          .toList();
+      for (final n in nodes) {
+        final p = positions[n['id'] as String];
+        if (p == null) continue;
+        n['x'] = double.parse(p.x.toStringAsFixed(4));
+        n['y'] = double.parse(p.y.toStringAsFixed(4));
+      }
+      topology['nodes'] = nodes;
+      manifest['topology'] = topology;
+      await api.putCouncil(widget.councilName, manifest);
+      ref.invalidate(councilTopologyProvider(widget.councilName));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Graph layout saved.')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Save failed: $e')),
+        );
+      }
+    }
   }
 
   @override
@@ -67,6 +109,8 @@ class _CouncilRunPageState extends ConsumerState<CouncilRunPage> {
           councilName: widget.councilName,
           summary: data,
           topology: topology,
+          graphController: _graphController,
+          onSaveLayout: _saveLayout,
           onStop: () async {
             final api = ref.read(dashboardApiProvider);
             try {
@@ -98,12 +142,16 @@ class _Body extends StatelessWidget {
     required this.councilName,
     required this.summary,
     required this.topology,
+    required this.graphController,
+    required this.onSaveLayout,
     required this.onStop,
   });
 
   final String councilName;
   final Map<String, dynamic> summary;
   final AsyncValue<Map<String, dynamic>> topology;
+  final AgentGraphController graphController;
+  final Future<void> Function() onSaveLayout;
   final Future<void> Function() onStop;
 
   @override
@@ -204,12 +252,20 @@ class _Body extends StatelessWidget {
                 children: [
                   Padding(
                     padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        'Agent topology — overlay aggregates this council',
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Node Interaction Graph',
+                            style: Theme.of(context).textTheme.titleMedium,
+                          ),
+                        ),
+                        TextButton.icon(
+                          onPressed: onSaveLayout,
+                          icon: const Icon(Icons.save_outlined, size: 18),
+                          label: const Text('Save layout'),
+                        ),
+                      ],
                     ),
                   ),
                   Expanded(
@@ -219,6 +275,7 @@ class _Body extends StatelessWidget {
                       edges:
                           (t['edges'] as List).cast<Map<String, dynamic>>(),
                       overlay: overlay,
+                      controller: graphController,
                     ),
                   ),
                 ],

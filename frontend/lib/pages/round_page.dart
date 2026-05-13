@@ -231,6 +231,7 @@ class _NodeTile extends StatelessWidget {
     final tokens = (overlay?['approx_tokens'] as num?) ?? 0;
     final wall = (overlay?['wall_seconds'] as num?) ?? 0;
     final active = (overlay?['active'] as bool?) ?? false;
+    final state = (overlay?['state'] as String?) ?? 'idle';
     final icon = kind == 'code' ? Icons.code : Icons.smart_toy_outlined;
     final scheme = Theme.of(context).colorScheme;
     return Material(
@@ -255,22 +256,13 @@ class _NodeTile extends StatelessWidget {
                   children: [
                     Text(label,
                         style: Theme.of(context).textTheme.bodyMedium),
-                    if (active && kind == 'llm')
-                      Text('working',
-                          style: Theme.of(context).textTheme.bodySmall)
-                    else if (active)
-                      Text('running',
-                          style: Theme.of(context).textTheme.bodySmall)
-                    else if (kind == 'llm' && calls > 0)
+                    if (state == 'done' && kind == 'llm' && calls > 0)
                       Text(
                         '${calls.toInt()} calls · ≈${_kfmt(tokens)} tok · ${wall.toStringAsFixed(0)}s',
                         style: Theme.of(context).textTheme.bodySmall,
                       )
-                    else if (kind == 'llm')
-                      Text('idle',
-                          style: Theme.of(context).textTheme.bodySmall)
                     else
-                      Text('code',
+                      Text(state,
                           style: Theme.of(context).textTheme.bodySmall),
                   ],
                 ),

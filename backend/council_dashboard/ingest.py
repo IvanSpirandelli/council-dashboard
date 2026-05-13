@@ -146,7 +146,23 @@ def round_summary(round_dir: Path) -> dict[str, Any]:
         slot["wall_seconds"] += _wall_seconds(call)
         slot["approx_tokens"] = _approx_tokens(slot["prompt_chars"] + slot["response_chars"])
 
-    active_call = _in_flight_call(llm_calls) if not has_decision else None
+    in_flight = _read_in_flight_sentinels(round_dir) if not has_decision else []
+    active_agents = [_agent_id(c["agent"]) for c in in_flight]
+    # Code-phase sentinels mirror the LLM in-progress files for validator
+    # and executor — the loop writes them while the phase is running.
+    active_code_nodes = [
+        name
+        for name in ("validator", "executor")
+        if (round_dir / f"{name}.in_progress").exists()
+    ]
+    # Backward-compatible single-call summary (latest start wins).
+    active_call: dict[str, Any] | None = None
+    if in_flight:
+        latest = max(in_flight, key=lambda c: c.get("started_at", ""))
+        active_call = {
+            "agent": _agent_id(latest["agent"]),
+            "started_at": latest.get("started_at"),
+        }
     promoted_count = sum(1 for c in candidates if c["promoted"])
     # Executor runs after the LLM phase: decision.json is written first,
     # then runs.jsonl is appended one entry per promoted spec.
@@ -173,7 +189,15 @@ def round_summary(round_dir: Path) -> dict[str, Any]:
         "results": _result_summary(runs),
         "status": status,
         "active_call": active_call,
+        "active_agents": active_agents,
+        "active_code_nodes": active_code_nodes,
         "executor_active": executor_active,
+        # decider_done lets the validator say it's "done" once any decider
+        # call has been recorded — the decider only runs after validator
+        # finishes.
+        "decider_done": any(
+            slot["agent"] == "decider" for slot in per_agent.values()
+        ),
     }
 
 
@@ -185,15 +209,26 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def _in_flight_call(calls: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Return the most recent call lacking ``completed_at`` (= currently running)."""
-    for c in reversed(calls):
-        if not c.get("completed_at") and c.get("started_at"):
-            return {
-                "agent": _agent_id(c.get("agent", "unknown")),
-                "started_at": c.get("started_at"),
-            }
-    return None
+def _read_in_flight_sentinels(round_dir: Path) -> list[dict[str, Any]]:
+    """Read every ``<round>/llm/*.in_progress.json`` sentinel.
+
+    The ml-trainer recorder writes one of these before each chat call and
+    removes it on completion. This is the only live-state signal available
+    while a call is in flight — ``llm_calls.jsonl`` is only appended to
+    after the response arrives.
+    """
+    llm_dir = round_dir / "llm"
+    if not llm_dir.is_dir():
+        return []
+    out: list[dict[str, Any]] = []
+    for p in sorted(llm_dir.glob("*.in_progress.json")):
+        try:
+            blob = json.loads(p.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        if isinstance(blob, dict) and blob.get("agent"):
+            out.append(blob)
+    return out
 
 
 def round_detail(session_dir: Path, round_id: str) -> dict[str, Any] | None:
@@ -313,19 +348,21 @@ def read_response(runs_root: Path, relative: str) -> Any:
 
 def topology_overlay(
     round_or_session: dict[str, Any],
-    valid_ids: set[str],
+    nodes: list[dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
-    """Map node_id → {calls, approx_tokens, wall_seconds, active} for the frontend.
+    """Map node_id → overlay entry (calls, tokens, wall_seconds, active, state).
 
-    ``valid_ids`` filters out unknown agent names (e.g., a renamed seat)
-    so the overlay only attaches data the topology can render.
+    ``nodes`` is the full topology node list (with ``id`` + ``kind``). The
+    overlay only attaches data the topology can render and uses ``kind`` to
+    derive a unified lifecycle state (``idle | working | running | done``)
+    the frontend can render uniformly.
 
     For a session, the overlay reflects the *current* round (or the
-    latest one if the launcher is idle) — not a sum across history. The
-    earlier summing behavior made every LLM node look "done" forever
-    after the first round, because total calls only ever go up.
+    latest one if the launcher is idle) — not a sum across history.
     """
-    active_agent = (round_or_session.get("active_call") or {}).get("agent")
+    kinds_by_id = {n["id"]: n.get("kind", "llm") for n in nodes if n.get("id")}
+    valid_ids = set(kinds_by_id)
+
     chosen: dict[str, Any] | None
     if "per_agent" in round_or_session:  # round summary
         chosen = round_or_session
@@ -340,36 +377,114 @@ def topology_overlay(
                     break
         if chosen is None and rounds:
             chosen = rounds[-1]  # fallback: latest completed round
+
     per_agent_iter: Iterable[dict[str, Any]] = (
         (chosen or {}).get("per_agent", []) if chosen else []
     )
+    active_agents: set[str] = set(
+        (chosen or {}).get("active_agents", []) if chosen else []
+    )
+    active_code_nodes: set[str] = set(
+        (chosen or {}).get("active_code_nodes", []) if chosen else []
+    )
     executor_active = bool((chosen or {}).get("executor_active")) if chosen else False
+    decider_done = bool((chosen or {}).get("decider_done")) if chosen else False
+    promoted_count = int((chosen or {}).get("promoted_count", 0)) if chosen else 0
+    executed_count = int((chosen or {}).get("executed_count", 0)) if chosen else 0
+    round_status = (chosen or {}).get("status") if chosen else None
+
     overlay: dict[str, dict[str, Any]] = {}
     for slot in per_agent_iter:
         if slot["agent"] not in valid_ids:
             continue
-        slot = {**slot, "active": slot["agent"] == active_agent}
+        slot = {**slot, "active": slot["agent"] in active_agents}
         overlay[slot["agent"]] = slot
-    if active_agent and active_agent in valid_ids and active_agent not in overlay:
-        overlay[active_agent] = {
-            "agent": active_agent,
+    # In-flight LLM agents without prior completed calls still need entries.
+    for agent_id in active_agents:
+        if agent_id not in valid_ids or agent_id in overlay:
+            continue
+        overlay[agent_id] = {
+            "agent": agent_id,
             "calls": 0,
             "approx_tokens": 0,
             "wall_seconds": 0.0,
             "active": True,
         }
-    # Executor is a code node; it never has LLM calls, so it never appears
-    # in per_agent. Synthesize an overlay entry when training is in flight.
-    if executor_active and "executor" in valid_ids:
-        existing = overlay.get(
-            "executor",
+    # Code nodes never have LLM calls, so they never appear in per_agent.
+    # Synthesize entries for each so the frontend sees the lifecycle state.
+    for node_id, kind in kinds_by_id.items():
+        if kind != "code":
+            continue
+        active = node_id in active_code_nodes or (
+            node_id == "executor" and executor_active
+        )
+        entry = overlay.get(
+            node_id,
             {
-                "agent": "executor",
+                "agent": node_id,
                 "calls": 0,
                 "approx_tokens": 0,
                 "wall_seconds": 0.0,
             },
         )
-        existing["active"] = True
-        overlay["executor"] = existing
+        entry["active"] = active
+        entry["done"] = _code_done(
+            node_id,
+            active=active,
+            decider_done=decider_done,
+            promoted_count=promoted_count,
+            executed_count=executed_count,
+            round_status=round_status,
+        )
+        overlay[node_id] = entry
+    # Final pass: attach unified state for every entry so the frontend can
+    # render llm/code with a single switch.
+    for node_id, entry in overlay.items():
+        entry["state"] = _node_state(
+            kinds_by_id.get(node_id, "llm"),
+            active=bool(entry.get("active")),
+            calls=int(entry.get("calls", 0) or 0),
+            done=bool(entry.get("done")),
+        )
     return overlay
+
+
+def _code_done(
+    node_id: str,
+    *,
+    active: bool,
+    decider_done: bool,
+    promoted_count: int,
+    executed_count: int,
+    round_status: str | None,
+) -> bool:
+    """Has this code phase finished running for the chosen round?"""
+    if active:
+        return False
+    if node_id == "validator":
+        # Validator runs before the decider; the moment any decider call
+        # is on record (or the round is fully committed) the phase is done.
+        return decider_done or round_status == "completed"
+    if node_id == "executor":
+        if round_status == "completed":
+            return True
+        return promoted_count > 0 and executed_count >= promoted_count
+    return False
+
+
+def _node_state(
+    kind: str, *, active: bool, calls: int, done: bool
+) -> str:
+    """Lifecycle label the frontend renders verbatim."""
+    if kind == "llm":
+        if active:
+            return "working"
+        if calls > 0:
+            return "done"
+        return "idle"
+    # code node
+    if active:
+        return "running"
+    if done:
+        return "done"
+    return "idle"
