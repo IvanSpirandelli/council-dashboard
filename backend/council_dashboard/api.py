@@ -249,6 +249,23 @@ def council_node_source(name: str, node_id: str) -> dict[str, Any]:
     }
 
 
+@app.get("/councils/{name}/rounds/{round_id}/one-round-command")
+def council_round_one_round_command(name: str, round_id: str) -> dict[str, Any]:
+    """Snapshot of the one-round command that was pinned to this round.
+
+    Returns ``{"body": "<text>"}`` if a snapshot exists, ``{"body": ""}``
+    if the round committed without an active command.
+    """
+    if "/" in round_id or ".." in round_id:
+        raise HTTPException(400, "invalid round_id")
+    snapshot = (
+        _canonical_session_dir(name) / round_id / "one_round_command.md"
+    )
+    if not snapshot.exists():
+        return {"body": ""}
+    return {"body": snapshot.read_text()}
+
+
 @app.get("/councils/{name}/rounds/{round_id}/llm/{filename}")
 def council_llm_artifact(
     name: str, round_id: str, filename: str

@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../api/providers.dart';
 import '../widgets/error_view.dart';
 import '../widgets/feature_chip.dart';
+import '../widgets/one_round_command_snapshot.dart';
 import '../widgets/results_table.dart';
 
 class RoundPage extends ConsumerStatefulWidget {
@@ -66,6 +67,10 @@ class _RoundPageState extends ConsumerState<RoundPage> {
               .cast<String, Map<String, dynamic>>();
           final calls = ((data['llm_calls'] as List?) ?? [])
               .cast<Map<String, dynamic>>();
+          final snapshot = OneRoundCommandSnapshot(
+            councilName: widget.councilName,
+            roundId: widget.roundId,
+          );
           return LayoutBuilder(builder: (ctx, c) {
             final wide = c.maxWidth > 1100;
             final nodesPanel = topology.when(
@@ -91,23 +96,34 @@ class _RoundPageState extends ConsumerState<RoundPage> {
               summary: data['summary'] as Map<String, dynamic>,
             );
             if (wide) {
-              return Row(
+              return Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  SizedBox(
-                    width: 280,
-                    child: Card(
-                        margin: const EdgeInsets.all(12), child: nodesPanel),
-                  ),
+                  snapshot,
                   Expanded(
-                      child: Card(
-                          margin: const EdgeInsets.fromLTRB(0, 12, 12, 12),
-                          child: ioPanel)),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        SizedBox(
+                          width: 280,
+                          child: Card(
+                              margin: const EdgeInsets.all(12),
+                              child: nodesPanel),
+                        ),
+                        Expanded(
+                            child: Card(
+                                margin:
+                                    const EdgeInsets.fromLTRB(0, 12, 12, 12),
+                                child: ioPanel)),
+                      ],
+                    ),
+                  ),
                 ],
               );
             }
             return ListView(
               children: [
+                snapshot,
                 SizedBox(
                     height: 380,
                     child: Card(
@@ -239,7 +255,13 @@ class _NodeTile extends StatelessWidget {
                   children: [
                     Text(label,
                         style: Theme.of(context).textTheme.bodyMedium),
-                    if (kind == 'llm' && calls > 0)
+                    if (active && kind == 'llm')
+                      Text('working',
+                          style: Theme.of(context).textTheme.bodySmall)
+                    else if (active)
+                      Text('running',
+                          style: Theme.of(context).textTheme.bodySmall)
+                    else if (kind == 'llm' && calls > 0)
                       Text(
                         '${calls.toInt()} calls · ≈${_kfmt(tokens)} tok · ${wall.toStringAsFixed(0)}s',
                         style: Theme.of(context).textTheme.bodySmall,
@@ -318,7 +340,7 @@ class _IOPanel extends ConsumerWidget {
             const Tab(text: 'Raw decision'),
           ]),
           Expanded(
-            child: TabBarView(children: [
+            child: TabBarView(physics: const NeverScrollableScrollPhysics(), children: [
               showCode
                   ? _CodeTab(
                       councilName: councilName, nodeId: focusedAgent!)
@@ -429,7 +451,7 @@ class _LLMCallsTabState extends ConsumerState<_LLMCallsTab> {
           ),
           const TabBar(tabs: [Tab(text: 'Prompt'), Tab(text: 'Response')]),
           Expanded(
-            child: TabBarView(children: [
+            child: TabBarView(physics: const NeverScrollableScrollPhysics(), children: [
               _MonoText(_promptBody ?? ''),
               _MonoText(_responseBody ?? ''),
             ]),
@@ -512,6 +534,7 @@ class _CodeTab extends ConsumerWidget {
               ),
               Expanded(
                 child: TabBarView(
+                  physics: const NeverScrollableScrollPhysics(),
                   children: [
                     for (final s in sources) _MonoText(s['body'] as String),
                   ],

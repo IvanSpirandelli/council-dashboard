@@ -2,7 +2,7 @@
 """Cooperative-stop wrapper around ``ml_trainer.council.run_council``.
 
 The dashboard's supervisor invokes this script in a subprocess. It runs
-one council round at a time via ``run_round_v2`` and checks for
+one council round at a time via ``run_round`` and checks for
 ``runs_root/.STOP`` between rounds, so a stop request is honoured at
 the next clean boundary instead of mid-round.
 
@@ -108,7 +108,7 @@ def main() -> None:
     # ml-trainer must be importable. It's installed with `uv sync` inside
     # the ml-trainer repo; the user's factory module typically lives there
     # too, so we let PYTHONPATH handle it.
-    from ml_trainer.council.loop import run_round_v2  # noqa: E402
+    from ml_trainer.council.loop import run_round  # noqa: E402
     from ml_trainer.tracking import list_rounds, read_decision  # noqa: E402
 
     factory = _resolve_factory(args.factory)
@@ -146,7 +146,7 @@ def main() -> None:
             round_id = _next_round_id(runs_root)
             logger.info("starting %s", round_id)
             _write_runner_state(runs_root, current_round=round_id, status="running")
-            decision = run_round_v2(
+            decision = run_round(
                 round_id=round_id,
                 runs_root=runs_root,
                 executor=seats["executor"],

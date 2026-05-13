@@ -650,6 +650,7 @@ class _PreviewPaneState extends State<_PreviewPane>
         Expanded(
           child: TabBarView(
             controller: _tab,
+            physics: const NeverScrollableScrollPhysics(),
             children: [
               _PromptView(text: widget.userPrompt),
               _PromptView(text: widget.systemPrompt),

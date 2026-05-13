@@ -147,7 +147,14 @@ def round_summary(round_dir: Path) -> dict[str, Any]:
         slot["approx_tokens"] = _approx_tokens(slot["prompt_chars"] + slot["response_chars"])
 
     active_call = _in_flight_call(llm_calls) if not has_decision else None
-    status = "completed" if has_decision else "running"
+    promoted_count = sum(1 for c in candidates if c["promoted"])
+    # Executor runs after the LLM phase: decision.json is written first,
+    # then runs.jsonl is appended one entry per promoted spec.
+    executor_active = has_decision and len(runs) < promoted_count
+    if has_decision and not executor_active:
+        status = "completed"
+    else:
+        status = "running"
     return {
         "round_id": decision.get("round_id", round_dir.name),
         "timestamp": decision.get("timestamp"),
@@ -155,7 +162,7 @@ def round_summary(round_dir: Path) -> dict[str, Any]:
         "parent_round_id": decision.get("parent_round_id"),
         "selection_rationale": decision.get("selection_rationale", "")[:500],
         "candidates": candidates,
-        "promoted_count": sum(1 for c in candidates if c["promoted"]),
+        "promoted_count": promoted_count,
         "candidate_count": len(candidates),
         "executed_count": len(runs),
         "llm_call_count": len(llm_calls),
@@ -166,6 +173,7 @@ def round_summary(round_dir: Path) -> dict[str, Any]:
         "results": _result_summary(runs),
         "status": status,
         "active_call": active_call,
+        "executor_active": executor_active,
     }
 
 
@@ -251,7 +259,7 @@ def _wall_seconds(call: dict[str, Any]) -> float:
         s = datetime.fromisoformat(started)
         c = datetime.fromisoformat(completed)
         return max((c - s).total_seconds(), 0.0)
-    except Exception:
+    except (TypeError, ValueError):
         return 0.0
 
 
@@ -318,13 +326,13 @@ def topology_overlay(
     after the first round, because total calls only ever go up.
     """
     active_agent = (round_or_session.get("active_call") or {}).get("agent")
-    per_agent_iter: Iterable[dict[str, Any]]
+    chosen: dict[str, Any] | None
     if "per_agent" in round_or_session:  # round summary
-        per_agent_iter = round_or_session["per_agent"]
+        chosen = round_or_session
     else:  # session summary — pick a single round to display
         rounds = round_or_session.get("rounds", []) or []
         current_id = round_or_session.get("current_round_id")
-        chosen: dict[str, Any] | None = None
+        chosen = None
         if current_id:
             for r in rounds:
                 if r.get("round_id") == current_id:
@@ -332,7 +340,10 @@ def topology_overlay(
                     break
         if chosen is None and rounds:
             chosen = rounds[-1]  # fallback: latest completed round
-        per_agent_iter = (chosen or {}).get("per_agent", []) if chosen else []
+    per_agent_iter: Iterable[dict[str, Any]] = (
+        (chosen or {}).get("per_agent", []) if chosen else []
+    )
+    executor_active = bool((chosen or {}).get("executor_active")) if chosen else False
     overlay: dict[str, dict[str, Any]] = {}
     for slot in per_agent_iter:
         if slot["agent"] not in valid_ids:
@@ -347,4 +358,18 @@ def topology_overlay(
             "wall_seconds": 0.0,
             "active": True,
         }
+    # Executor is a code node; it never has LLM calls, so it never appears
+    # in per_agent. Synthesize an overlay entry when training is in flight.
+    if executor_active and "executor" in valid_ids:
+        existing = overlay.get(
+            "executor",
+            {
+                "agent": "executor",
+                "calls": 0,
+                "approx_tokens": 0,
+                "wall_seconds": 0.0,
+            },
+        )
+        existing["active"] = True
+        overlay["executor"] = existing
     return overlay

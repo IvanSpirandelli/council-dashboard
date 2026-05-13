@@ -125,6 +125,10 @@ class DashboardApi {
           String name, String roundId, String filename) =>
       _getJson(_u('/councils/$name/rounds/$roundId/llm/$filename'));
 
+  Future<Map<String, dynamic>> councilRoundOneRoundCommand(
+          String name, String roundId) =>
+      _getJson(_u('/councils/$name/rounds/$roundId/one-round-command'));
+
   Future<Map<String, dynamic>> councilTopology(String name) =>
       _getJson(_u('/topology', {'council': name}));
 

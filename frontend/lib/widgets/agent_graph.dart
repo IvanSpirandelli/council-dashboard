@@ -250,10 +250,15 @@ class _AgentGraphState extends State<AgentGraph> {
   }
 
   (Color, String) _statusFor(bool active, int calls, bool isLLM) {
-    if (!isLLM) return (const Color(0xFF607D8B), 'code');
+    if (isLLM) {
+      if (active) return (const Color(0xFF2196F3), 'working');
+      if (calls > 0) return (const Color(0xFF4CAF50), 'done');
+      return (const Color(0xFF757575), 'idle');
+    }
+    // Code node (validator, executor): plain 'code' when idle, 'running'
+    // when the backend marks it active (today only the executor surfaces).
     if (active) return (const Color(0xFF2196F3), 'running');
-    if (calls > 0) return (const Color(0xFF4CAF50), 'done');
-    return (const Color(0xFF757575), 'idle');
+    return (const Color(0xFF607D8B), 'code');
   }
 
   double _maxTokens() {

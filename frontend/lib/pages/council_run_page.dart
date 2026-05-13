@@ -8,6 +8,7 @@ import '../api/providers.dart';
 import '../widgets/agent_graph.dart';
 import '../widgets/error_view.dart';
 import '../widgets/launch_config_panel.dart';
+import '../widgets/one_round_command_panel.dart';
 
 /// Detailed view of a council's canonical session: rounds, topology
 /// overlay, start/stop controls.
@@ -175,6 +176,8 @@ class _Body extends StatelessWidget {
                   councilName: councilName,
                   running: running,
                 ),
+                const Divider(),
+                OneRoundCommandPanel(councilName: councilName),
                 const Divider(),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
