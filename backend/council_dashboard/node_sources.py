@@ -20,7 +20,7 @@ _NODE_SOURCES: dict[str, list[tuple[str, str]]] = {
     "validator": [
         ("ml_trainer/council/dedup.py", "ml_trainer/council/dedup.py"),
         (
-            "ml_trainer/council/loop.py · _attach_dedup_flags",
+            "ml_trainer/council/loop.py · _dedupe_candidates",
             "ml_trainer/council/loop.py",
         ),
     ],
