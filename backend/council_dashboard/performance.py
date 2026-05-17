@@ -1,12 +1,18 @@
 """Corpus-derived performance table with a parquet-backed cache.
 
+Two corpora are supported, keyed by the council manifest's ``corpus`` field:
+
+- ``mlps`` (default) — flat ``models/mlps/<fingerprint>/aggregate.json``.
+- ``gnns`` — nested ``models/gnns/<config>_<variant>/<fingerprint>/aggregate.json``
+  with a different aggregate schema (``metrics[k] = {mean, std, n}``
+  instead of ``{key}_mean / {key}_std``).
+
 The dashboard's "performance tile" reads ml-trainer's *corpus* directly
-— ``models_root/mlps/<fingerprint>/aggregate.json`` — rather than a
-single council session's ``runs.jsonl``. Recomputing this on every
-render scans hundreds of small JSON files, so we materialize one row
-per fingerprint into a parquet at ``models_root/mlps/.perf_cache.parquet``
-and only rebuild when an aggregate has been touched since the last
-write.
+rather than a single council session's ``runs.jsonl``. Recomputing on
+every render scans hundreds of small JSON files, so we materialize one
+row per fingerprint into a parquet cache at
+``models_root/<family>/.perf_cache.parquet`` and only rebuild when an
+aggregate has been touched since the last write.
 """
 
 from __future__ import annotations
@@ -27,8 +33,8 @@ def _read_json(path: Path) -> dict[str, Any] | None:
         return None
 
 
-def _flatten(fp_dir: Path) -> dict[str, Any] | None:
-    """One row per fingerprint, joining spec + aggregate."""
+def _flatten_mlp(fp_dir: Path) -> dict[str, Any] | None:
+    """One row per fingerprint for the MLP corpus."""
     aggregate = _read_json(fp_dir / "aggregate.json")
     spec = _read_json(fp_dir / "spec.json")
     if aggregate is None:
@@ -66,10 +72,77 @@ def _flatten(fp_dir: Path) -> dict[str, Any] | None:
     }
 
 
-def _corpus_dir(models_root: Path, family: str = "mlps") -> Path:
-    if (models_root / family).is_dir():
-        return models_root / family
-    return models_root
+def _gnn_metric(aggregate_metrics: dict[str, Any], key: str, field: str) -> float | None:
+    """Pull ``metrics[key][field]`` from a GNN aggregate. Returns ``None`` if absent."""
+    entry = aggregate_metrics.get(key)
+    if isinstance(entry, dict):
+        v = entry.get(field)
+        return float(v) if isinstance(v, (int, float)) else None
+    return None
+
+
+def _flatten_gnn(fp_dir: Path) -> dict[str, Any] | None:
+    """One row per fingerprint for the GNN corpus.
+
+    GNN spec.json has a different schema (``config``, ``hparams``, ``extras``
+    with channel lists) and the aggregate stores metrics as
+    ``{mean, std, n}`` per key rather than ``{key}_mean`` / ``{key}_std``.
+    The output row shape mirrors :func:`_flatten_mlp` so the API + frontend
+    consume both without branching.
+    """
+    aggregate = _read_json(fp_dir / "aggregate.json")
+    spec = _read_json(fp_dir / "spec.json")
+    if aggregate is None:
+        return None
+    spec = spec or {}
+    hparams = spec.get("hparams") or {}
+    extras = spec.get("extras") or {}
+    metrics = aggregate.get("metrics") or {}
+
+    # Channel taxonomy: synthesize "<substrate>:<channel>" pills so the
+    # frontend's FeatureChipList renders something meaningful per recipe.
+    feature_ids: list[str] = []
+    substrate = extras.get("substrate") or ""
+    for ch in extras.get("vertex_channels", []) or []:
+        feature_ids.append(f"vtx:{ch}")
+    for ch in extras.get("triangle_channels", []) or []:
+        feature_ids.append(f"tri:{ch}")
+    for ch in extras.get("vv_edge_channels", []) or []:
+        feature_ids.append(f"vve:{ch}")
+    for ch in extras.get("tt_edge_channels", []) or []:
+        feature_ids.append(f"tte:{ch}")
+
+    hidden = hparams.get("hidden")
+    hidden_repr = str(hidden) if hidden is not None else ""
+
+    return {
+        "fingerprint": aggregate.get("fingerprint", fp_dir.name),
+        "surface": extras.get("surface_variant"),
+        "model_family": substrate,  # tri_gnn-like family is implied; substrate is the user-facing axis
+        "hidden": hidden_repr,
+        "num_layers": hparams.get("num_layers"),
+        "dropout": hparams.get("dropout"),
+        "lr": hparams.get("lr"),
+        "n_features": len(feature_ids),
+        "feature_ids": ",".join(feature_ids),
+        "n_seeds": aggregate.get("n_seeds"),
+        "n_seeds_succeeded": aggregate.get("n_seeds"),  # GNN aggregate omits a separate "succeeded" count
+        "test_pearson_r_mean": _gnn_metric(metrics, "test_pearson_r", "mean"),
+        "test_pearson_r_std": _gnn_metric(metrics, "test_pearson_r", "std"),
+        "test_rmse_mean": _gnn_metric(metrics, "test_rmse", "mean"),
+        "val_pearson_r_mean": _gnn_metric(metrics, "val_pearson_r", "mean"),
+        "bdb2020_pearson_r_mean": _gnn_metric(metrics, "bdb2020_pearson_r", "mean"),
+        "egfr_pearson_r_mean": _gnn_metric(metrics, "egfr_pearson_r", "mean"),
+        "mpro_pearson_r_mean": _gnn_metric(metrics, "mpro_pearson_r", "mean"),
+        "trained_at": aggregate.get("completed_at"),
+    }
+
+
+def _corpus_dir(models_root: Path, family: str) -> Path:
+    # No fallback to the parent or to a sibling family — a missing
+    # subdir must yield an empty corpus, not a cross-family scan that
+    # mis-flattens aggregates against the wrong schema.
+    return models_root / family
 
 
 def _index_mtime(corpus_dir: Path) -> float:
@@ -78,14 +151,32 @@ def _index_mtime(corpus_dir: Path) -> float:
     return idx.stat().st_mtime if idx.exists() else 0.0
 
 
-def _build_dataframe(corpus_dir: Path) -> pd.DataFrame:
+def _build_dataframe(corpus_dir: Path, family: str) -> pd.DataFrame:
+    """Walk the corpus dir; layout depends on family.
+
+    - ``mlps``: ``<corpus_dir>/<fingerprint>/aggregate.json`` (one level).
+    - ``gnns``: ``<corpus_dir>/<config>_<variant>/<fingerprint>/aggregate.json``
+      (two levels). The intermediate config dir groups all HP variants of the
+      same recipe.
+    """
     rows: list[dict[str, Any]] = []
-    for fp_dir in sorted(corpus_dir.iterdir()):
-        if not fp_dir.is_dir() or fp_dir.name.startswith("."):
-            continue
-        row = _flatten(fp_dir)
-        if row is not None:
-            rows.append(row)
+    if family == "gnns":
+        for cfg_dir in sorted(corpus_dir.iterdir()):
+            if not cfg_dir.is_dir() or cfg_dir.name.startswith("."):
+                continue
+            for fp_dir in sorted(cfg_dir.iterdir()):
+                if not fp_dir.is_dir() or fp_dir.name.startswith("."):
+                    continue
+                row = _flatten_gnn(fp_dir)
+                if row is not None:
+                    rows.append(row)
+    else:
+        for fp_dir in sorted(corpus_dir.iterdir()):
+            if not fp_dir.is_dir() or fp_dir.name.startswith("."):
+                continue
+            row = _flatten_mlp(fp_dir)
+            if row is not None:
+                rows.append(row)
     return pd.DataFrame(rows)
 
 
@@ -108,7 +199,7 @@ def load_performance(
             needs_rebuild = True
 
     if needs_rebuild:
-        df = _build_dataframe(corpus_dir)
+        df = _build_dataframe(corpus_dir, family)
         if not df.empty:
             df.to_parquet(cache_path, index=False)
         return df
@@ -126,7 +217,13 @@ def performance_payload(
     """JSON-friendly payload for the frontend (rows + small metadata)."""
     df = load_performance(models_root, family=family)
     if df.empty:
-        return {"rows": [], "n_total": 0, "sort": sort, "ascending": ascending}
+        return {
+            "rows": [],
+            "n_total": 0,
+            "sort": sort,
+            "ascending": ascending,
+            "family": family,
+        }
 
     if sort in df.columns:
         df = df.sort_values(sort, ascending=ascending, na_position="last")
@@ -140,4 +237,5 @@ def performance_payload(
         "n_total": int(n_total),
         "sort": sort,
         "ascending": ascending,
+        "family": family,
     }

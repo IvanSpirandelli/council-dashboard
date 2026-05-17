@@ -108,36 +108,73 @@ final councilNodeSourceProvider = FutureProvider.family<Map<String, dynamic>,
       .councilNodeSource(key.councilName, key.nodeId);
 });
 
-class PerfQuery {
-  const PerfQuery({
+// ── Scaffold (kind-driven panels) ─────────────────────────────────
+
+class ScaffoldLayoutKey {
+  const ScaffoldLayoutKey(this.councilName, this.page);
+  final String councilName;
+  final String page;
+  @override
+  bool operator ==(Object other) =>
+      other is ScaffoldLayoutKey &&
+      other.councilName == councilName &&
+      other.page == page;
+  @override
+  int get hashCode => Object.hash(councilName, page);
+}
+
+class ScaffoldSlotKey {
+  const ScaffoldSlotKey({
     required this.councilName,
-    this.sort = 'test_pearson_r_mean',
-    this.ascending = false,
-    this.limit,
+    required this.page,
+    required this.slotId,
+    this.overrides = const {},
   });
   final String councilName;
-  final String sort;
-  final bool ascending;
-  final int? limit;
+  final String page;
+  final String slotId;
+  final Map<String, dynamic> overrides;
 
   @override
   bool operator ==(Object other) =>
-      other is PerfQuery &&
+      other is ScaffoldSlotKey &&
       other.councilName == councilName &&
-      other.sort == sort &&
-      other.ascending == ascending &&
-      other.limit == limit;
-
+      other.page == page &&
+      other.slotId == slotId &&
+      _mapEq(other.overrides, overrides);
   @override
-  int get hashCode => Object.hash(councilName, sort, ascending, limit);
+  int get hashCode => Object.hash(
+        councilName,
+        page,
+        slotId,
+        Object.hashAllUnordered(
+          overrides.entries.map((e) => Object.hash(e.key, e.value)),
+        ),
+      );
+
+  static bool _mapEq(Map<String, dynamic> a, Map<String, dynamic> b) {
+    if (a.length != b.length) return false;
+    for (final e in a.entries) {
+      if (b[e.key] != e.value) return false;
+    }
+    return true;
+  }
 }
 
-final councilPerformanceProvider =
-    FutureProvider.family<Map<String, dynamic>, PerfQuery>((ref, q) async {
-  return ref.watch(dashboardApiProvider).councilPerformance(
-        q.councilName,
-        sort: q.sort,
-        ascending: q.ascending,
-        limit: q.limit,
+final scaffoldLayoutProvider = FutureProvider.family<Map<String, dynamic>,
+    ScaffoldLayoutKey>((ref, k) async {
+  return ref.watch(dashboardApiProvider).councilScaffoldLayout(
+        k.councilName,
+        page: k.page,
+      );
+});
+
+final scaffoldSlotProvider = FutureProvider.family<Map<String, dynamic>,
+    ScaffoldSlotKey>((ref, k) async {
+  return ref.watch(dashboardApiProvider).councilScaffoldSlot(
+        k.councilName,
+        slotId: k.slotId,
+        page: k.page,
+        overrides: k.overrides,
       );
 });

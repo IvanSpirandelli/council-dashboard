@@ -10,8 +10,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from council_dashboard import councils as councils_mod
-from council_dashboard import ingest, node_sources, performance, supervisor
+from council_dashboard import ingest, kinds, node_sources, supervisor
 from council_dashboard.config import Settings
+from council_dashboard.scaffold import routes as scaffold_routes
 
 
 def _canonical_session_dir(name: str) -> Path:
@@ -30,6 +31,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Register every shipped kind (panels + providers) once at import.
+kinds.bootstrap(models_root=settings.models_root)
+app.include_router(scaffold_routes.build_router(councils_root=settings.councils_root))
 
 
 # ── Models ───────────────────────────────────────────────────────────
@@ -320,29 +325,6 @@ def council_clear_stop(name: str) -> dict[str, Any]:
     session_dir = _canonical_session_dir(name)
     supervisor.clear_stop(session_dir)
     return {"ok": True}
-
-
-@app.get("/councils/{name}/performance")
-def council_performance(
-    name: str,
-    sort: str = "test_pearson_r_mean",
-    ascending: bool = False,
-    limit: int | None = None,
-    rebuild: bool = False,
-) -> dict[str, Any]:
-    """Cached corpus-derived performance table for this council."""
-    try:
-        councils_mod.read_manifest(settings.councils_root, name)
-    except FileNotFoundError as e:
-        raise HTTPException(404, str(e))
-    if rebuild:
-        performance.load_performance(settings.models_root, rebuild=True)
-    return performance.performance_payload(
-        settings.models_root,
-        sort=sort,
-        ascending=ascending,
-        limit=limit,
-    )
 
 
 @app.post("/councils/{name}/agents/{agent_id}/preview-from-body")

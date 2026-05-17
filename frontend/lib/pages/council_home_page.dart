@@ -5,15 +5,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../api/providers.dart';
-import '../widgets/error_view.dart';
-import '../widgets/results_table.dart';
+import '../scaffold/page_shells.dart';
 
-/// Per-council home: performance preview, edit-council, continue-tasks.
+/// Per-council home: scaffold "top" page on the left, action tiles
+/// (edit-council, continue-tasks) on the right.
 ///
-/// Auto-polls the session endpoint every 2s while mounted so the
-/// Running/Idle badge stays current; the perf provider is only
-/// refreshed on manual button press (it sorts the whole model corpus
-/// and is comparatively expensive).
+/// Action tiles stay bespoke because they're not data panels (they
+/// edit manifests and start subprocesses). Everything else comes from
+/// the kind's registered panels via `PanelStackView`.
 class CouncilHomePage extends ConsumerStatefulWidget {
   const CouncilHomePage({super.key, required this.councilName});
 
@@ -43,10 +42,36 @@ class _CouncilHomePageState extends ConsumerState<CouncilHomePage> {
 
   @override
   Widget build(BuildContext context) {
-    final perf = ref.watch(councilPerformanceProvider(
-      PerfQuery(councilName: widget.councilName, limit: 10),
-    ));
     final session = ref.watch(councilSessionProvider(widget.councilName));
+    final layoutKey = ScaffoldLayoutKey(widget.councilName, 'top');
+
+    final perfTile = Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+            child: Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                icon: const Icon(Icons.open_in_new),
+                label: const Text('Full table'),
+                onPressed: () => context
+                    .push('/councils/${widget.councilName}/performance'),
+              ),
+            ),
+          ),
+          Expanded(
+            child: PanelStackView(
+              councilName: widget.councilName,
+              page: 'top',
+            ),
+          ),
+        ],
+      ),
+    );
+
     return Scaffold(
       appBar: AppBar(
         title: Text(widget.councilName),
@@ -54,9 +79,7 @@ class _CouncilHomePageState extends ConsumerState<CouncilHomePage> {
           IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: () {
-              ref.invalidate(councilPerformanceProvider(
-                PerfQuery(councilName: widget.councilName, limit: 10),
-              ));
+              ref.invalidate(scaffoldLayoutProvider(layoutKey));
               ref.invalidate(councilSessionProvider(widget.councilName));
             },
           ),
@@ -64,10 +87,6 @@ class _CouncilHomePageState extends ConsumerState<CouncilHomePage> {
       ),
       body: LayoutBuilder(builder: (ctx, c) {
         final wide = c.maxWidth > 900;
-        final perfTile = _PerformanceTile(
-          councilName: widget.councilName,
-          perf: perf,
-        );
         final actionTiles = _ActionTiles(
           councilName: widget.councilName,
           session: session,
@@ -89,91 +108,6 @@ class _CouncilHomePageState extends ConsumerState<CouncilHomePage> {
         );
       }),
     );
-  }
-}
-
-class _PerformanceTile extends StatelessWidget {
-  const _PerformanceTile({required this.councilName, required this.perf});
-  final String councilName;
-  final AsyncValue<Map<String, dynamic>> perf;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      margin: const EdgeInsets.all(12),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          ListTile(
-            title: Text('Top performers',
-                style: Theme.of(context).textTheme.titleMedium),
-            subtitle: perf.maybeWhen(
-              data: (d) => Text('${d['n_total']} models in corpus'),
-              orElse: () => const Text(''),
-            ),
-            trailing: TextButton.icon(
-              icon: const Icon(Icons.open_in_new),
-              label: const Text('Full table'),
-              onPressed: () =>
-                  context.push('/councils/$councilName/performance'),
-            ),
-          ),
-          const Divider(height: 1),
-          Expanded(
-            child: perf.when(
-              loading: () => const LoadingView(label: 'Loading…'),
-              error: (e, _) => ErrorView(e),
-              data: (d) {
-                final rows =
-                    ((d['rows'] as List?) ?? []).cast<Map<String, dynamic>>();
-                if (rows.isEmpty) {
-                  return const Center(
-                      child: Text('No models in corpus yet.'));
-                }
-                return _PerfRows(rows: rows);
-              },
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _PerfRows extends StatelessWidget {
-  const _PerfRows({required this.rows});
-  final List<Map<String, dynamic>> rows;
-
-  @override
-  Widget build(BuildContext context) {
-    return ResultsTable(
-      idLabel: 'fingerprint',
-      emptyMessage: 'No models in corpus yet.',
-      rows: [
-        for (final r in rows)
-          ResultRow(
-            id: r['fingerprint']?.toString() ?? '',
-            cl2: _num(r['test_pearson_r_mean']),
-            bdb: _num(r['bdb2020_pearson_r_mean']),
-            egfr: _num(r['egfr_pearson_r_mean']),
-            mpro: _num(r['mpro_pearson_r_mean']),
-            featureIds: _splitFeatureIds(r['feature_ids']),
-            architecture: r['hidden']?.toString() ?? '—',
-          ),
-      ],
-    );
-  }
-
-  num? _num(Object? v) => v is num ? v : null;
-
-  // performance.py serializes feature_ids as a comma-joined string, not
-  // a list — split here so FeatureChipList can render pastel pills.
-  List<String> _splitFeatureIds(Object? v) {
-    if (v is List) return [for (final f in v) f.toString()];
-    if (v is String && v.isNotEmpty) {
-      return [for (final f in v.split(',')) if (f.isNotEmpty) f];
-    }
-    return const [];
   }
 }
 

@@ -53,6 +53,59 @@ The backend reads sessions from
 `../agentic-docking/ml-trainer/runs`) and finds `models/mlps/` under
 `$ML_TRAINER_MODELS_ROOT`. Override via the `.env` file in `backend/`.
 
+## Scaffolding
+
+The dashboard is a **shared scaffold** plus **per-kind plug-ins**.
+"Kind" is the kind of council — today only `ml_trainer` (which covers
+MLP + GNN flavors via a `corpus:` manifest field), with `research` /
+`code-builder` planned.
+
+**Three scaffold pages**, each composed of registered panels:
+
+- `top` — preview of recent or top results (rendered on the council home).
+- `full` — drill-down full results page.
+- `info` — manifest / topology / resources (kind-specific).
+
+**Two endpoints** drive every page:
+
+```
+GET /councils/{name}/scaffold/layout?page=<top|full|info>
+    → {"kind": "...", "slots": [{"panel_id": "...", "slot_id": "..."}]}
+
+GET /councils/{name}/scaffold/slots/{slot_id}?page=<page>&<panel-overrides>
+    → typed PanelResponse {"panel_id", "title", "props": {...}}
+```
+
+The shell fetches the layout once, then fans out per-slot fetches. Each
+`panel_id` resolves to a registered Flutter widget via `kind_registry.dart`.
+Per-kind UI divergence is just a different widget registered under the
+same panel id.
+
+**Composition primitives** (not an inheritance tree):
+
+```
+backend/council_dashboard/
+  scaffold/             routes + Panel / CouncilProvider contracts
+  kinds/
+    ml_trainer.py       declares panels + page layouts for kind=ml_trainer
+frontend/lib/
+  scaffold/             PanelStackView, page shells, kind_registry
+  kinds/
+    ml_trainer/         Dart panel widgets + register.dart
+```
+
+**Adding a new kind** (e.g. `research`):
+
+1. `backend/council_dashboard/kinds/research.py` — declare its panels and
+   page layouts; add one line to `kinds/__init__.py:bootstrap()`.
+2. `frontend/lib/kinds/research/` — Dart widgets per panel +
+   `register.dart`; call it from `main.dart`.
+3. Add `kind: research` to the council manifest.
+
+Existing pages (`council_run_page`, `council_builder_page`,
+`round_page`) are heavily stateful and stay bespoke — they're info-shaped
+but not panel-shaped.
+
 ## What you can do
 
 - **Sessions** — list every `council_*` run under `runs_root`, see round

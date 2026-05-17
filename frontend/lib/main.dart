@@ -2,14 +2,18 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'kinds/ml_trainer/register.dart';
 import 'pages/council_builder_page.dart';
 import 'pages/council_home_page.dart';
 import 'pages/council_run_page.dart';
 import 'pages/home_page.dart';
-import 'pages/performance_page.dart';
 import 'pages/round_page.dart';
+import 'scaffold/page_shells.dart';
 
 void main() {
+  // Register every shipped kind's widgets once at boot. New kinds add
+  // one import + one call here.
+  registerMlTrainerKind();
   runApp(const ProviderScope(child: CouncilDashboardApp()));
 }
 
@@ -43,7 +47,7 @@ final _router = GoRouter(
     GoRoute(
       path: '/councils/:name/performance',
       builder: (_, state) =>
-          PerformancePage(councilName: state.pathParameters['name']!),
+          FullResultsShell(councilName: state.pathParameters['name']!),
     ),
   ],
 );

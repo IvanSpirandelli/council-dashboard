@@ -8,30 +8,20 @@ the next clean boundary instead of mid-round.
 
 Configuring which agents to wire up is the user's responsibility — the
 council factory is provided through the ``--factory`` flag, which must
-point to a Python callable that accepts ``(runs_root, executor)`` and
-returns ``(empirical, theoretical, decider, critic, executor, bundle)``.
+point to a Python callable that accepts ``(runs_root, **kwargs)`` and
+returns a dict with the keys::
 
-If you don't have a factory module yet, write one like::
+    {
+        "analysts": {role: AnalystAgent, ...},  # dict, any number of seats
+        "decider": DeciderAgent,
+        "critic": MasterCriticAgent,
+        "executor": Executor,
+        "bundle": ResourceBundle,
+    }
 
-    # my_council_factory.py
-    from ml_trainer.council.claude_code_council import (
-        ClaudeCodeEmpiricalAnalyst, ClaudeCodeTheoreticalAnalyst,
-        ClaudeCodeDecider, ClaudeCodeMasterCritic,
-    )
-    from ml_trainer.council.llm import ClaudeCodeLLM
-    from ml_trainer.council.resources_loader import ResourceBundle
-    from ml_trainer.executors.local_executor import LocalExecutor
-
-    def build(runs_root, *, model="sonnet"):
-        llm = ClaudeCodeLLM(model=model)
-        return {
-            "empirical": ClaudeCodeEmpiricalAnalyst(llm),
-            "theoretical": ClaudeCodeTheoreticalAnalyst(llm),
-            "decider": ClaudeCodeDecider(llm),
-            "critic": ClaudeCodeMasterCritic(llm),
-            "executor": LocalExecutor(),
-            "bundle": ResourceBundle(),
-        }
+The default factory ``ml_trainer.council.factory:build`` enumerates the
+analyst seats from the manifest. MLP yields 3 (empirical, theoretical,
+oob); GNN yields 2 (anchor, frontier).
 
 Then invoke::
 
@@ -150,9 +140,7 @@ def main() -> None:
                 round_id=round_id,
                 runs_root=runs_root,
                 executor=seats["executor"],
-                empirical=seats["empirical"],
-                theoretical=seats["theoretical"],
-                oob=seats["oob"],
+                analysts=seats["analysts"],
                 decider=seats["decider"],
                 critic=seats["critic"],
                 bundle=seats.get("bundle"),

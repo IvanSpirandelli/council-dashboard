@@ -136,17 +136,22 @@ class DashboardApi {
           String name, String nodeId) =>
       _getJson(_u('/councils/$name/nodes/$nodeId/source'));
 
-  Future<Map<String, dynamic>> councilPerformance(
+  // ── Scaffold (kind-driven panels) ─────────────────────────────────
+
+  Future<Map<String, dynamic>> councilScaffoldLayout(
     String name, {
-    String sort = 'test_pearson_r_mean',
-    bool ascending = false,
-    int? limit,
+    required String page,
+  }) =>
+      _getJson(_u('/councils/$name/scaffold/layout', {'page': page}));
+
+  Future<Map<String, dynamic>> councilScaffoldSlot(
+    String name, {
+    required String slotId,
+    required String page,
+    Map<String, dynamic>? overrides,
   }) {
-    return _getJson(_u('/councils/$name/performance', {
-      'sort': sort,
-      'ascending': ascending,
-      if (limit != null) 'limit': limit,
-    }));
+    final qp = <String, dynamic>{'page': page, ...?overrides};
+    return _getJson(_u('/councils/$name/scaffold/slots/$slotId', qp));
   }
 
   Future<Map<String, dynamic>> councilLaunchConfig(String name) =>
