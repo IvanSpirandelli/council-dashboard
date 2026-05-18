@@ -28,6 +28,21 @@ _NODE_SOURCES: dict[str, list[tuple[str, str]]] = {
         ("ml_trainer/executors/local.py", "ml_trainer/executors/local.py"),
         ("ml_trainer/executors/multi_seed.py", "ml_trainer/executors/multi_seed.py"),
     ],
+    # ── Generated resource nodes (kind: generated in topology) ─────────
+    # Each maps to the Python that produces the resource's body at
+    # render time. The frontend opens this view when the node is tapped.
+    "catalog": [
+        ("ml_trainer/_scalar.py · catalog_md", "ml_trainer/_scalar.py"),
+    ],
+    "models_corpus": [
+        (
+            "ml_trainer/council/training_corpus.py · render_corpus",
+            "ml_trainer/council/training_corpus.py",
+        ),
+    ],
+    "feature_signal": [
+        ("scripts/per_scalar_signal.py", "scripts/per_scalar_signal.py"),
+    ],
 }
 
 

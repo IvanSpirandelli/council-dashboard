@@ -89,13 +89,42 @@ def write_manifest(
 
 
 def topology(councils_root: Path, name: str) -> dict[str, Any]:
-    """Return the topology block (nodes + edges) declared in the council's manifest."""
+    """Return the topology block (nodes + edges) declared in the council's manifest.
+
+    LLM nodes are augmented with the small per-agent config knobs the
+    dashboard renders as chips on the tile (``n_candidates``,
+    ``max_promotions``, ``schema``). The merge is one-way and read-only —
+    edits still go through the manifest editor.
+    """
     manifest = read_manifest(councils_root, name)
     topo = manifest.get("topology") or {}
+    agents_by_id = {
+        a.get("id"): a for a in manifest.get("agents", []) if a.get("id")
+    }
+    nodes = [_augment_node(n, agents_by_id) for n in topo.get("nodes", [])]
     return {
-        "nodes": topo.get("nodes", []),
+        "nodes": nodes,
         "edges": topo.get("edges", []),
     }
+
+
+_CHIP_KEYS = ("n_candidates", "max_promotions", "model", "schema")
+
+
+def _augment_node(
+    node: dict[str, Any], agents_by_id: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    """Attach manifest-config chips to an LLM node when an agent matches by id."""
+    out = dict(node)
+    if out.get("kind") != "llm":
+        return out
+    spec = agents_by_id.get(out.get("id"))
+    if not spec:
+        return out
+    chips = {k: spec[k] for k in _CHIP_KEYS if k in spec}
+    if chips:
+        out["chips"] = chips
+    return out
 
 
 def list_resources(councils_root: Path, name: str) -> list[dict[str, Any]]:

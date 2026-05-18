@@ -44,14 +44,54 @@ const double _tileHNon = 50.0;
 const Color _bgColor = Color(0xFF34495E);
 const Color _tileColor = Color(0xFFFFF59D);
 const Color _nonAgentTileColor = Color(0xFFE0E0E0);
+const Color _fileTileColor = Color(0xFFE3F2FD);
+const Color _generatedTileColor = Color(0xFFE0F2F1);
+const Color _humanOverrideTileColor = Color(0xFFFFE0B2);
 const Color _edgeColor = Color(0xCCFFFFFF);
+const Color _resourceEdgeColor = Color(0x88FFFFFF);
 
-Size _sizeFor(bool isLLM) =>
-    isLLM ? const Size(_tileW, _tileH) : const Size(_tileWNon, _tileHNon);
+bool _isInputKind(String kind) =>
+    kind == 'file' || kind == 'generated' || kind == 'human_override';
+
+Size _sizeFor(String kind) =>
+    kind == 'llm' ? const Size(_tileW, _tileH) : const Size(_tileWNon, _tileHNon);
+
+Color _tileColorFor(String kind) {
+  switch (kind) {
+    case 'llm':
+      return _tileColor;
+    case 'file':
+      return _fileTileColor;
+    case 'generated':
+      return _generatedTileColor;
+    case 'human_override':
+      return _humanOverrideTileColor;
+    default:
+      return _nonAgentTileColor;
+  }
+}
+
+IconData _iconForKind(String kind) {
+  switch (kind) {
+    case 'llm':
+      return Icons.smart_toy_outlined;
+    case 'file':
+      return Icons.description_outlined;
+    case 'generated':
+      return Icons.settings_suggest_outlined;
+    case 'human_override':
+      return Icons.person_outline;
+    default:
+      return Icons.code;
+  }
+}
 
 class AgentGraphState extends State<AgentGraph> {
   final Map<String, Offset> _positions = {};
   Size _lastSize = Size.zero;
+  // Node id currently focused via tap. When set, resource edges connected
+  // to this node are drawn and connected nodes get a highlight border.
+  String? _focusedNodeId;
 
   @override
   void initState() {
@@ -111,51 +151,91 @@ class AgentGraphState extends State<AgentGraph> {
 
       final sizes = <String, Size>{
         for (final n in widget.nodes)
-          n['id'] as String: _sizeFor(n['kind'] == 'llm'),
+          n['id'] as String: _sizeFor((n['kind'] as String?) ?? 'llm'),
       };
 
-      final lateral = _edgeLateralOffsets();
-      final labels = _layoutEdgeLabels(sizes, lateral);
+      // Resource edges (kind: resource) are hidden by default and only
+      // drawn when one of their endpoints is the focused node. Flow edges
+      // (no kind, or kind != 'resource') are always drawn.
+      final visibleEdges = _visibleEdges();
+      final lateral = _edgeLateralOffsets(visibleEdges);
+      final labels = _layoutEdgeLabels(visibleEdges, sizes, lateral);
+      final highlighted = _highlightedNodeIds();
 
       return Container(
         color: _bgColor,
-        child: Stack(
-          children: [
-            Positioned.fill(
-              child: CustomPaint(
-                painter: _EdgePainter(
-                  edges: widget.edges,
-                  positions: Map<String, Offset>.from(_positions),
-                  sizes: sizes,
-                  lateralOffsets: lateral,
+        child: GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: () {
+            if (_focusedNodeId != null) {
+              setState(() => _focusedNodeId = null);
+            }
+          },
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: CustomPaint(
+                  painter: _EdgePainter(
+                    edges: visibleEdges,
+                    positions: Map<String, Offset>.from(_positions),
+                    sizes: sizes,
+                    lateralOffsets: lateral,
+                  ),
                 ),
               ),
-            ),
-            for (final l in labels) _EdgeLabelChip(label: l),
-            for (final n in widget.nodes) _buildTile(n, maxTokens, size),
-          ],
+              for (final l in labels) _EdgeLabelChip(label: l),
+              for (final n in widget.nodes)
+                _buildTile(n, maxTokens, size, highlighted),
+            ],
+          ),
         ),
       );
     });
   }
 
+  /// Edges to actually draw given the current focus. Resource edges
+  /// only show when the focused node is one of their endpoints.
+  List<Map<String, dynamic>> _visibleEdges() {
+    return [
+      for (final e in widget.edges)
+        if (e['kind'] != 'resource' ||
+            (_focusedNodeId != null &&
+                (e['src'] == _focusedNodeId || e['dst'] == _focusedNodeId)))
+          e,
+    ];
+  }
+
+  /// Nodes that should render with a highlight border (the focused node
+  /// itself plus any node it's connected to via a resource edge).
+  Set<String> _highlightedNodeIds() {
+    final focused = _focusedNodeId;
+    if (focused == null) return const {};
+    final out = <String>{focused};
+    for (final e in widget.edges) {
+      if (e['kind'] != 'resource') continue;
+      if (e['src'] == focused) out.add(e['dst'] as String);
+      if (e['dst'] == focused) out.add(e['src'] as String);
+    }
+    return out;
+  }
+
   /// Per-edge lateral offset so that a pair of edges in opposite
   /// directions between the same two nodes (e.g. decider↔master_critic)
   /// renders as two parallel arrows instead of one line drawn twice.
-  Map<int, double> _edgeLateralOffsets() {
+  Map<int, double> _edgeLateralOffsets(List<Map<String, dynamic>> edges) {
     const double sep = 9.0;
     final out = <int, double>{};
     final pairs = <String, int>{};
-    for (var i = 0; i < widget.edges.length; i++) {
-      final src = widget.edges[i]['src'] as String;
-      final dst = widget.edges[i]['dst'] as String;
+    for (var i = 0; i < edges.length; i++) {
+      final src = edges[i]['src'] as String;
+      final dst = edges[i]['dst'] as String;
       pairs['$src→$dst'] = i;
     }
     final used = <int>{};
-    for (var i = 0; i < widget.edges.length; i++) {
+    for (var i = 0; i < edges.length; i++) {
       if (used.contains(i)) continue;
-      final src = widget.edges[i]['src'] as String;
-      final dst = widget.edges[i]['dst'] as String;
+      final src = edges[i]['src'] as String;
+      final dst = edges[i]['dst'] as String;
       final reverseIdx = pairs['$dst→$src'];
       if (reverseIdx != null && reverseIdx != i) {
         // Both edges shift to their own perpLeft side by sep/2.
@@ -175,14 +255,21 @@ class AgentGraphState extends State<AgentGraph> {
   /// pin to the same line but on opposite sides, so the chip bodies
   /// can't collide regardless of how wide the text is.
   List<_LabelLayout> _layoutEdgeLabels(
-      Map<String, Size> sizes, Map<int, double> lateral) {
+      List<Map<String, dynamic>> edges,
+      Map<String, Size> sizes,
+      Map<int, double> lateral) {
     // Tiny breathing room between chip and line.
     const double gap = 3.0;
     final out = <_LabelLayout>[];
-    for (var i = 0; i < widget.edges.length; i++) {
-      final e = widget.edges[i];
+    for (var i = 0; i < edges.length; i++) {
+      final e = edges[i];
       final src = e['src'] as String;
       final dst = e['dst'] as String;
+      // Resource edges are unlabeled (the source node identifies the
+      // resource), so skip label layout for them.
+      if (e['kind'] == 'resource') continue;
+      final label = e['label'];
+      if (label == null) continue;
       final a = _positions[src];
       final b = _positions[dst];
       if (a == null || b == null) continue;
@@ -199,7 +286,7 @@ class AgentGraphState extends State<AgentGraph> {
       final bClip = b - unit * _clipDist(unit, bSize) + shift;
       final mid = (aClip + bClip) / 2;
       out.add(_LabelLayout(
-        text: e['label'] as String,
+        text: label as String,
         anchor: mid + perpLeft * gap,
         perp: perpLeft,
       ));
@@ -217,7 +304,8 @@ class AgentGraphState extends State<AgentGraph> {
     return math.min(tx, ty);
   }
 
-  Widget _buildTile(Map<String, dynamic> n, double maxTokens, Size size) {
+  Widget _buildTile(Map<String, dynamic> n, double maxTokens, Size size,
+      Set<String> highlighted) {
     final id = n['id'] as String;
     final pos = _positions[id] ?? Offset.zero;
     final ov = widget.overlay[id];
@@ -226,16 +314,26 @@ class AgentGraphState extends State<AgentGraph> {
     final wall = (ov?['wall_seconds'] as num?)?.toDouble() ?? 0.0;
     final active = (ov?['active'] as bool?) ?? false;
     final done = (ov?['done'] as bool?) ?? false;
-    final isLLM = n['kind'] == 'llm';
-    final tileSize = _sizeFor(isLLM);
+    final kind = (n['kind'] as String?) ?? 'llm';
+    final isLLM = kind == 'llm';
+    final isInput = _isInputKind(kind);
+    final tileSize = _sizeFor(kind);
     final hw = tileSize.width / 2;
     final hh = tileSize.height / 2;
     // Prefer the backend-computed lifecycle string when present; fall back
-    // to local derivation for old payloads.
+    // to local derivation for old payloads. Input nodes have no lifecycle —
+    // they're static resources, so the header strip is omitted for them.
     final state = (ov?['state'] as String?) ??
         _localState(isLLM: isLLM, active: active, calls: calls, done: done);
     final statusColor = _colorForState(state);
-    final icon = isLLM ? Icons.smart_toy_outlined : Icons.code;
+    final icon = _iconForKind(kind);
+    final tileColor = _tileColorFor(kind);
+    final isHighlighted = highlighted.contains(id);
+    final borderColor = active
+        ? Colors.lightBlueAccent
+        : (isHighlighted ? Colors.orange : Colors.black87);
+    final borderWidth = active || isHighlighted ? 2.5 : 1.5;
+    final chips = (n['chips'] as Map?)?.cast<String, dynamic>();
 
     return Positioned(
       left: pos.dx - hw,
@@ -244,7 +342,15 @@ class AgentGraphState extends State<AgentGraph> {
       height: tileSize.height,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: () => widget.onAgentTap?.call(id),
+        onTap: () {
+          // Resource/input nodes toggle focus locally to drive the
+          // highlight overlay; LLM/code nodes still report up via the
+          // existing callback so parent pages can navigate.
+          setState(() {
+            _focusedNodeId = _focusedNodeId == id ? null : id;
+          });
+          widget.onAgentTap?.call(id);
+        },
         onPanUpdate: (d) {
           setState(() {
             final next = (_positions[id] ?? pos) + d.delta;
@@ -259,11 +365,8 @@ class AgentGraphState extends State<AgentGraph> {
           cursor: SystemMouseCursors.move,
           child: Container(
             decoration: BoxDecoration(
-              color: isLLM ? _tileColor : _nonAgentTileColor,
-              border: Border.all(
-                color: active ? Colors.lightBlueAccent : Colors.black87,
-                width: active ? 2.5 : 1.5,
-              ),
+              color: tileColor,
+              border: Border.all(color: borderColor, width: borderWidth),
               borderRadius: BorderRadius.circular(6),
               boxShadow: const [
                 BoxShadow(color: Color(0x55000000), blurRadius: 4, offset: Offset(0, 2)),
@@ -275,49 +378,61 @@ class AgentGraphState extends State<AgentGraph> {
                 mainAxisAlignment: MainAxisAlignment.start,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Container(
-                    color: statusColor,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 6, vertical: 1),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(icon, size: 11, color: Colors.white),
-                        const SizedBox(width: 4),
-                        Flexible(
-                          child: Text(
-                            state,
-                            style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w600,
+                  if (!isInput)
+                    Container(
+                      color: statusColor,
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 1),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(icon, size: 11, color: Colors.white),
+                          const SizedBox(width: 4),
+                          Flexible(
+                            child: Text(
+                              state,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.w600,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              textAlign: TextAlign.center,
                             ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.center,
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
                   Expanded(
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 4),
+                      padding: EdgeInsets.symmetric(
+                          horizontal: 8, vertical: isInput ? 2 : 4),
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         crossAxisAlignment: CrossAxisAlignment.center,
                         children: [
-                          Text(
-                            n['label'] as String,
-                            style: const TextStyle(
-                              color: Colors.black,
-                              fontSize: 13,
-                              fontWeight: FontWeight.w600,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            textAlign: TextAlign.center,
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              if (isInput) ...[
+                                Icon(icon, size: 12, color: Colors.black87),
+                                const SizedBox(width: 4),
+                              ],
+                              Flexible(
+                                child: Text(
+                                  n['label'] as String,
+                                  style: TextStyle(
+                                    color: Colors.black,
+                                    fontSize: isInput ? 11 : 13,
+                                    fontWeight: FontWeight.w600,
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  textAlign: TextAlign.center,
+                                ),
+                              ),
+                            ],
                           ),
                           if (isLLM) ...[
                             const SizedBox(height: 2),
@@ -331,6 +446,8 @@ class AgentGraphState extends State<AgentGraph> {
                               overflow: TextOverflow.ellipsis,
                               textAlign: TextAlign.center,
                             ),
+                            if (chips != null && chips.isNotEmpty)
+                              _ChipRow(chips: chips),
                           ],
                         ],
                       ),
@@ -416,8 +533,9 @@ class _EdgePainter extends CustomPainter {
       final aSize = sizes[srcId] ?? const Size(_tileW, _tileH);
       final bSize = sizes[dstId] ?? const Size(_tileW, _tileH);
       _drawEdge(
-        canvas, a, b, aSize, bSize, e['label'] as String,
+        canvas, a, b, aSize, bSize,
         lateral: lateralOffsets[i] ?? 0,
+        isResource: e['kind'] == 'resource',
       );
     }
   }
@@ -427,9 +545,9 @@ class _EdgePainter extends CustomPainter {
     Offset a,
     Offset b,
     Size aSize,
-    Size bSize,
-    String label, {
+    Size bSize, {
     required double lateral,
+    required bool isResource,
   }) {
     final dir = b - a;
     final len = dir.distance;
@@ -439,14 +557,19 @@ class _EdgePainter extends CustomPainter {
     final shift = perpLeft * lateral;
     final aClip = a + unit * _clipDist(unit, aSize) + shift;
     final bClip = b - unit * _clipDist(unit, bSize) + shift;
-
-    canvas.drawLine(
-      aClip,
-      bClip,
-      Paint()
-        ..color = _edgeColor
-        ..strokeWidth = 1.5,
-    );
+    // Resource edges are thinner + dimmer + dashed: they're auxiliary
+    // wiring shown only when a node is focused, and should sit visually
+    // below the primary flow edges.
+    final color = isResource ? _resourceEdgeColor : _edgeColor;
+    final stroke = isResource ? 1.0 : 1.5;
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = stroke;
+    if (isResource) {
+      _drawDashedLine(canvas, aClip, bClip, paint);
+    } else {
+      canvas.drawLine(aClip, bClip, paint);
+    }
 
     final back = bClip - unit * 9;
     final left = back + perpLeft * 6;
@@ -456,10 +579,25 @@ class _EdgePainter extends CustomPainter {
       ..lineTo(left.dx, left.dy)
       ..lineTo(right.dx, right.dy)
       ..close();
-    canvas.drawPath(path, Paint()..color = _edgeColor);
+    canvas.drawPath(path, Paint()..color = color);
     // Labels are drawn as widgets in the Stack — see _EdgeLabelChip —
     // so they sit above the edge canvas with a real white background
     // and aren't covered by line / arrowhead pixels.
+  }
+
+  void _drawDashedLine(Canvas canvas, Offset a, Offset b, Paint paint) {
+    const double dash = 5.0;
+    const double gap = 4.0;
+    final delta = b - a;
+    final total = delta.distance;
+    if (total <= 0) return;
+    final unit = delta / total;
+    double travelled = 0.0;
+    while (travelled < total) {
+      final segEnd = math.min(travelled + dash, total);
+      canvas.drawLine(a + unit * travelled, a + unit * segEnd, paint);
+      travelled = segEnd + gap;
+    }
   }
 
   double _clipDist(Offset u, Size tile) {
@@ -533,6 +671,39 @@ class _EdgeLabelChip extends StatelessWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Manifest-config chips rendered inline on an LLM agent tile
+/// (e.g. n=10, max=22, sonnet). Kept tiny — these are read-only.
+class _ChipRow extends StatelessWidget {
+  const _ChipRow({required this.chips});
+  final Map<String, dynamic> chips;
+
+  @override
+  Widget build(BuildContext context) {
+    final pieces = <String>[];
+    final n = chips['n_candidates'];
+    if (n != null) pieces.add('n=$n');
+    final mp = chips['max_promotions'];
+    if (mp != null) pieces.add('max=$mp');
+    final model = chips['model'];
+    if (model is String && model.isNotEmpty) pieces.add(model);
+    if (pieces.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(top: 1),
+      child: Text(
+        pieces.join(' · '),
+        style: const TextStyle(
+          color: Colors.black54,
+          fontSize: 10,
+          fontWeight: FontWeight.w500,
+        ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+        textAlign: TextAlign.center,
       ),
     );
   }

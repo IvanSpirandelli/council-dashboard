@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../api/providers.dart';
 import '../widgets/agent_graph.dart';
 import '../widgets/error_view.dart';
+import '../widgets/input_node_dialog.dart';
 import '../widgets/launch_config_panel.dart';
 import '../widgets/one_round_command_panel.dart';
 
@@ -276,6 +277,10 @@ class _Body extends StatelessWidget {
                           (t['edges'] as List).cast<Map<String, dynamic>>(),
                       overlay: overlay,
                       controller: graphController,
+                      onAgentTap: (id) => _onNodeTap(
+                          context,
+                          (t['nodes'] as List).cast<Map<String, dynamic>>(),
+                          id),
                     ),
                   ),
                 ],
@@ -285,6 +290,24 @@ class _Body extends StatelessWidget {
         ),
       ],
     );
+  }
+
+  void _onNodeTap(
+    BuildContext context,
+    List<Map<String, dynamic>> nodes,
+    String id,
+  ) {
+    final node = nodes.firstWhere(
+      (n) => n['id'] == id,
+      orElse: () => const <String, dynamic>{},
+    );
+    if (node.isEmpty) return;
+    final kind = node['kind'] as String?;
+    // Only input nodes get a dialog today; agent/code nodes just toggle
+    // the in-graph focus highlight via AgentGraph's internal state.
+    const inputKinds = {'file', 'generated', 'human_override'};
+    if (!inputKinds.contains(kind)) return;
+    showInputNodeDialog(context, councilName: councilName, node: node);
   }
 
   Widget _roundTile(BuildContext context, Map<String, dynamic> r) {
