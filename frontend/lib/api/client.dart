@@ -136,6 +136,10 @@ class DashboardApi {
           String name, String nodeId) =>
       _getJson(_u('/councils/$name/nodes/$nodeId/source'));
 
+  Future<Map<String, dynamic>> councilNodeRendered(
+          String name, String nodeId) =>
+      _getJson(_u('/councils/$name/nodes/$nodeId/rendered'));
+
   // ── Scaffold (kind-driven panels) ─────────────────────────────────
 
   Future<Map<String, dynamic>> councilScaffoldLayout(
@@ -177,6 +181,9 @@ class DashboardApi {
 
   Future<Map<String, dynamic>> councilClearStop(String name) =>
       _postJson(_u('/councils/$name/clear-stop'));
+
+  Future<Map<String, dynamic>> councilDeleteIncompleteRounds(String name) =>
+      _postJson(_u('/councils/$name/incomplete-rounds/delete'));
 
   void close() => _client.close();
 }

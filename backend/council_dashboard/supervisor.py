@@ -21,6 +21,7 @@ import json
 import os
 import signal
 import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -51,7 +52,13 @@ def read_runner_state(session_dir: Path) -> dict[str, Any] | None:
     except json.JSONDecodeError:
         return None
     pid = state.get("pid")
-    state["alive"] = bool(pid) and _is_alive(pid)
+    # The launcher writes a terminal status ("crashed", "stopped_by_request",
+    # "round_cap_reached", "stopped_council_*") on exit. Trust that signal —
+    # a zombie/defunct subprocess still answers os.kill(pid, 0) until reaped.
+    status = state.get("status")
+    state["alive"] = (
+        bool(pid) and status == "running" and _is_alive(pid)
+    )
     return state
 
 
@@ -133,18 +140,38 @@ def request_stop(session_dir: Path) -> dict[str, Any]:
 
 
 def force_stop(session_dir: Path) -> dict[str, Any]:
-    """SIGTERM the running process. Used as a fallback to ``request_stop``."""
+    """Kill the running process group.
+
+    The launcher converts SIGTERM into a cooperative ``.STOP`` touch
+    (so the round can finish), which is useless when the round itself is
+    hung in ``claude -p``. So we send SIGTERM, give the launcher a brief
+    grace window to write its terminal status, then SIGKILL the group.
+    """
     state = read_runner_state(session_dir)
     if not state or not state.get("alive"):
         return state or {"alive": False}
     pid = state["pid"]
     try:
-        os.killpg(os.getpgid(pid), signal.SIGTERM)
+        pgid = os.getpgid(pid)
+    except ProcessLookupError:
+        state["alive"] = False
+        return state
+    try:
+        os.killpg(pgid, signal.SIGTERM)
     except ProcessLookupError:
         pass
-    state["status"] = "stopping"
+    for _ in range(20):
+        if not _is_alive(pid):
+            break
+        time.sleep(0.1)
+    if _is_alive(pid):
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    state["status"] = "stopped_by_request"
     _state_path(session_dir).write_text(json.dumps(state, indent=2))
-    state["alive"] = _is_alive(pid)
+    state["alive"] = _is_alive(pid) and state.get("status") == "running"
     return state
 
 

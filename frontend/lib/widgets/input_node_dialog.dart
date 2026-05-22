@@ -42,8 +42,10 @@ class _InputNodeDialogBodyState extends ConsumerState<_InputNodeDialogBody> {
   bool _dirty = false;
   String _loadedBody = '';
   String? _error;
-  // For generated nodes: read-only source body + path label.
-  List<Map<String, String>> _sources = const [];
+  // For generated nodes: the rendered ``.md`` body produced by the
+  // backing Python (tap the script chip in the input bar to see the
+  // Python itself).
+  String _renderedBody = '';
 
   String get _kind => (widget.node['kind'] as String?) ?? '';
   String get _id => widget.node['id'] as String;
@@ -71,17 +73,9 @@ class _InputNodeDialogBodyState extends ConsumerState<_InputNodeDialogBody> {
     final api = ref.read(dashboardApiProvider);
     try {
       if (_isGenerated) {
-        final r = await api.councilNodeSource(widget.councilName, _id);
-        final sources = ((r['sources'] as List?) ?? [])
-            .cast<Map<String, dynamic>>()
-            .map((s) => {
-                  'label': (s['label'] as String?) ?? '',
-                  'path': (s['path'] as String?) ?? '',
-                  'body': (s['body'] as String?) ?? '',
-                })
-            .toList();
+        final r = await api.councilNodeRendered(widget.councilName, _id);
         setState(() {
-          _sources = sources;
+          _renderedBody = (r['body'] as String?) ?? '';
           _loading = false;
           _error = null;
         });
@@ -234,52 +228,31 @@ class _InputNodeDialogBodyState extends ConsumerState<_InputNodeDialogBody> {
       );
     }
     if (_isGenerated) {
-      if (_sources.isEmpty) {
+      if (_renderedBody.isEmpty) {
         return const Padding(
           padding: EdgeInsets.all(16),
-          child: Text('(no source mapping registered for this node)'),
+          child: Text('(this resource rendered as an empty string)'),
         );
       }
-      return ListView.separated(
+      return Padding(
         padding: const EdgeInsets.all(12),
-        itemCount: _sources.length,
-        separatorBuilder: (_, _) => const SizedBox(height: 12),
-        itemBuilder: (_, i) {
-          final s = _sources[i];
-          return Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                s['label'] ?? '',
-                style: Theme.of(context).textTheme.titleSmall,
+        child: Container(
+          padding: const EdgeInsets.all(8),
+          decoration: BoxDecoration(
+            color: const Color(0xFFF7F7F7),
+            border: Border.all(color: const Color(0xFFE0E0E0)),
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: SingleChildScrollView(
+            child: SelectableText(
+              _renderedBody,
+              style: const TextStyle(
+                fontFamily: 'monospace',
+                fontSize: 12,
               ),
-              if ((s['path'] ?? '').isNotEmpty)
-                Text(
-                  s['path']!,
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: Colors.black54,
-                  ),
-                ),
-              const SizedBox(height: 6),
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: const Color(0xFFF7F7F7),
-                  border: Border.all(color: const Color(0xFFE0E0E0)),
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: SelectableText(
-                  s['body'] ?? '',
-                  style: const TextStyle(
-                    fontFamily: 'monospace',
-                    fontSize: 12,
-                  ),
-                ),
-              ),
-            ],
-          );
-        },
+            ),
+          ),
+        ),
       );
     }
     // file / human_override → editable text field.

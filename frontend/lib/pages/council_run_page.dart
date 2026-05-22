@@ -7,7 +7,9 @@ import 'package:go_router/go_router.dart';
 import '../api/providers.dart';
 import '../widgets/agent_graph.dart';
 import '../widgets/error_view.dart';
+import '../widgets/input_bar.dart';
 import '../widgets/input_node_dialog.dart';
+import '../widgets/node_source_dialog.dart';
 import '../widgets/launch_config_panel.dart';
 import '../widgets/one_round_command_panel.dart';
 
@@ -42,6 +44,7 @@ class _CouncilRunPageState extends ConsumerState<CouncilRunPage> {
   @override
   void dispose() {
     _pollTimer?.cancel();
+    _graphController.dispose();
     super.dispose();
   }
 
@@ -132,6 +135,69 @@ class _CouncilRunPageState extends ConsumerState<CouncilRunPage> {
               }
             }
           },
+          onForceStop: () async {
+            final confirmed = await showDialog<bool>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                title: const Text('Force-kill council?'),
+                content: const Text(
+                    'SIGKILLs the launcher process group. The current round '
+                    'will be left without a decision.json — use "Delete '
+                    'unfinished rounds" afterwards to clean it up.'),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(false),
+                    child: const Text('Cancel'),
+                  ),
+                  FilledButton(
+                    onPressed: () => Navigator.of(ctx).pop(true),
+                    child: const Text('Force kill'),
+                  ),
+                ],
+              ),
+            );
+            if (confirmed != true) return;
+            final api = ref.read(dashboardApiProvider);
+            try {
+              await api.councilStop(widget.councilName, force: true);
+              ref.invalidate(councilSessionProvider(widget.councilName));
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Council process killed.')),
+                );
+              }
+            } catch (e) {
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Force-stop failed: $e')),
+                );
+              }
+            }
+          },
+          onDeleteIncomplete: () async {
+            final api = ref.read(dashboardApiProvider);
+            try {
+              final res =
+                  await api.councilDeleteIncompleteRounds(widget.councilName);
+              ref.invalidate(councilSessionProvider(widget.councilName));
+              if (context.mounted) {
+                final deleted = (res['deleted'] as List?) ?? const [];
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(deleted.isEmpty
+                        ? 'No unfinished rounds found.'
+                        : 'Deleted: ${deleted.join(", ")}'),
+                  ),
+                );
+              }
+            } catch (e) {
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Delete failed: $e')),
+                );
+              }
+            }
+          },
         ),
       ),
     );
@@ -146,6 +212,8 @@ class _Body extends StatelessWidget {
     required this.graphController,
     required this.onSaveLayout,
     required this.onStop,
+    required this.onForceStop,
+    required this.onDeleteIncomplete,
   });
 
   final String councilName;
@@ -154,6 +222,8 @@ class _Body extends StatelessWidget {
   final AgentGraphController graphController;
   final Future<void> Function() onSaveLayout;
   final Future<void> Function() onStop;
+  final Future<void> Function() onForceStop;
+  final Future<void> Function() onDeleteIncomplete;
 
   @override
   Widget build(BuildContext context) {
@@ -212,15 +282,72 @@ class _Body extends StatelessWidget {
                 if (running)
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 12),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: FilledButton.tonalIcon(
-                        onPressed: () => onStop(),
-                        icon: const Icon(Icons.stop),
-                        label: const Text('Stop'),
-                      ),
+                    child: Wrap(
+                      spacing: 8,
+                      children: [
+                        FilledButton.tonalIcon(
+                          onPressed: () => onStop(),
+                          icon: const Icon(Icons.stop),
+                          label: const Text('Stop'),
+                        ),
+                        FilledButton.tonalIcon(
+                          onPressed: () => onForceStop(),
+                          icon: const Icon(Icons.dangerous_outlined),
+                          label: const Text('Force stop'),
+                        ),
+                      ],
                     ),
                   ),
+                if (!running)
+                  Builder(builder: (context) {
+                    final incompleteIds = [
+                      for (final r in rounds)
+                        if ((r['status'] as String? ?? 'completed') !=
+                            'completed')
+                          r['round_id'] as String,
+                    ];
+                    if (incompleteIds.isEmpty) {
+                      return const SizedBox.shrink();
+                    }
+                    return Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: FilledButton.tonalIcon(
+                          onPressed: () async {
+                            final confirmed = await showDialog<bool>(
+                              context: context,
+                              builder: (ctx) => AlertDialog(
+                                title: const Text('Delete unfinished rounds?'),
+                                content: Text(
+                                    'Will permanently remove ${incompleteIds.length} '
+                                    'round dir(s) without decision.json:\n\n'
+                                    '${incompleteIds.join(", ")}'),
+                                actions: [
+                                  TextButton(
+                                    onPressed: () =>
+                                        Navigator.of(ctx).pop(false),
+                                    child: const Text('Cancel'),
+                                  ),
+                                  FilledButton(
+                                    onPressed: () =>
+                                        Navigator.of(ctx).pop(true),
+                                    child: const Text('Delete'),
+                                  ),
+                                ],
+                              ),
+                            );
+                            if (confirmed == true) {
+                              await onDeleteIncomplete();
+                            }
+                          },
+                          icon: const Icon(Icons.delete_outline),
+                          label: Text(
+                              'Delete ${incompleteIds.length} unfinished round${incompleteIds.length == 1 ? "" : "s"}'),
+                        ),
+                      ),
+                    );
+                  }),
                 LaunchConfigPanel(
                   councilName: councilName,
                   running: running,
@@ -249,42 +376,81 @@ class _Body extends StatelessWidget {
             child: topology.when(
               loading: () => const LoadingView(),
               error: (e, _) => ErrorView(e),
-              data: (t) => Column(
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            'Node Interaction Graph',
-                            style: Theme.of(context).textTheme.titleMedium,
+              data: (t) {
+                final tNodes =
+                    (t['nodes'] as List).cast<Map<String, dynamic>>();
+                final tEdges =
+                    (t['edges'] as List).cast<Map<String, dynamic>>();
+                // Input nodes (file/generated/human_override) live in the
+                // top InputBar now; the graph only renders agent + code
+                // nodes and their flow edges. Resource edges drop out
+                // automatically once their endpoints are missing.
+                const inputKinds = {'file', 'generated', 'human_override'};
+                final graphNodes = [
+                  for (final n in tNodes)
+                    if (!inputKinds.contains(n['kind'])) n,
+                ];
+                final graphIds = {for (final n in graphNodes) n['id'] as String};
+                final graphEdges = [
+                  for (final e in tEdges)
+                    if (e['kind'] != 'resource' &&
+                        graphIds.contains(e['src']) &&
+                        graphIds.contains(e['dst']))
+                      e,
+                ];
+                return Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              'Node Interaction Graph',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
                           ),
-                        ),
-                        TextButton.icon(
-                          onPressed: onSaveLayout,
-                          icon: const Icon(Icons.save_outlined, size: 18),
-                          label: const Text('Save layout'),
-                        ),
-                      ],
+                          TextButton.icon(
+                            onPressed: onSaveLayout,
+                            icon: const Icon(Icons.save_outlined, size: 18),
+                            label: const Text('Save layout'),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                  Expanded(
-                    child: AgentGraph(
-                      nodes:
-                          (t['nodes'] as List).cast<Map<String, dynamic>>(),
-                      edges:
-                          (t['edges'] as List).cast<Map<String, dynamic>>(),
-                      overlay: overlay,
-                      controller: graphController,
-                      onAgentTap: (id) => _onNodeTap(
+                    ValueListenableBuilder<String?>(
+                      valueListenable: graphController.focusedNodeId,
+                      builder: (_, focusedId, _) => InputBar(
+                        nodes: tNodes,
+                        edges: tEdges,
+                        focusedNodeId: focusedId,
+                        onInputTap: (n) => showInputNodeDialog(
                           context,
-                          (t['nodes'] as List).cast<Map<String, dynamic>>(),
-                          id),
+                          councilName: councilName,
+                          node: n,
+                        ),
+                        onScriptTap: (n) => showNodeSourceDialog(
+                          context,
+                          councilName: councilName,
+                          nodeId: n['id'] as String,
+                          title:
+                              'Script for ${n['label'] ?? n['id']}',
+                        ),
+                      ),
                     ),
-                  ),
-                ],
-              ),
+                    Expanded(
+                      child: AgentGraph(
+                        nodes: graphNodes,
+                        edges: graphEdges,
+                        overlay: overlay,
+                        controller: graphController,
+                        onAgentTap: (id) =>
+                            _onNodeTap(context, graphNodes, id),
+                      ),
+                    ),
+                  ],
+                );
+              },
             ),
           ),
         ),
@@ -303,11 +469,18 @@ class _Body extends StatelessWidget {
     );
     if (node.isEmpty) return;
     final kind = node['kind'] as String?;
-    // Only input nodes get a dialog today; agent/code nodes just toggle
-    // the in-graph focus highlight via AgentGraph's internal state.
-    const inputKinds = {'file', 'generated', 'human_override'};
-    if (!inputKinds.contains(kind)) return;
-    showInputNodeDialog(context, councilName: councilName, node: node);
+    // Code nodes (validator / executor) open the Python source viewer.
+    // LLM nodes just toggle the in-graph focus highlight, which is
+    // already handled inside AgentGraph itself. Input nodes can't reach
+    // here anymore — they live in the InputBar.
+    if (kind == 'code') {
+      showNodeSourceDialog(
+        context,
+        councilName: councilName,
+        nodeId: id,
+        title: '${node['label'] ?? id} · source',
+      );
+    }
   }
 
   Widget _roundTile(BuildContext context, Map<String, dynamic> r) {

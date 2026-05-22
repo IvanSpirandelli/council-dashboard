@@ -114,7 +114,7 @@ _CHIP_KEYS = ("n_candidates", "max_promotions", "model", "schema")
 def _augment_node(
     node: dict[str, Any], agents_by_id: dict[str, dict[str, Any]]
 ) -> dict[str, Any]:
-    """Attach manifest-config chips to an LLM node when an agent matches by id."""
+    """Attach manifest-config chips + ordered context refs to an LLM node."""
     out = dict(node)
     if out.get("kind") != "llm":
         return out
@@ -124,6 +124,18 @@ def _augment_node(
     chips = {k: spec[k] for k in _CHIP_KEYS if k in spec}
     if chips:
         out["chips"] = chips
+    # Ordered list of resource ref ids — the inputs fed into this agent in
+    # the order they appear in its prompt context. The input bar uses this
+    # to sort feed-relevant inputs left→right when the agent is focused.
+    refs = [
+        entry["ref"]
+        for entry in spec.get("context", [])
+        if isinstance(entry, dict)
+        and entry.get("kind") == "resource"
+        and isinstance(entry.get("ref"), str)
+    ]
+    if refs:
+        out["context_refs"] = refs
     return out
 
 
@@ -209,6 +221,53 @@ def render_preview(
         raise RuntimeError(
             f"render_preview.py emitted non-JSON: {proc.stdout[:200]!r}"
         ) from e
+
+
+def render_resource(
+    councils_root: Path,
+    name: str,
+    node_id: str,
+    *,
+    ml_trainer_repo: Path,
+) -> dict[str, Any]:
+    """Shell out to ``scripts/render_resource.py`` for one generated resource.
+
+    Returns ``{"node_id", "body"}`` on success. Raises ``FileNotFoundError``
+    if the council is unknown, ``KeyError`` if the resource doesn't exist
+    on the bundle, and ``RuntimeError`` for other render failures.
+    """
+    council_dir = _resolve_council_dir(councils_root, name)
+    uv = shutil.which("uv")
+    if uv is None:
+        raise RuntimeError(
+            "`uv` not found in PATH; required to invoke ml-trainer's "
+            "Python env for resource rendering"
+        )
+    script = _scripts_dir() / "render_resource.py"
+    args = [
+        uv, "run", "--directory", str(ml_trainer_repo),
+        "python", str(script),
+        "--manifest", str(council_dir / "manifest.yaml"),
+        "--ml-trainer-repo", str(ml_trainer_repo),
+        "--node-id", node_id,
+    ]
+    proc = subprocess.run(args, capture_output=True, text=True, check=False)
+    try:
+        payload = json.loads(proc.stdout)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(
+            f"render_resource.py emitted non-JSON "
+            f"(exit {proc.returncode}): {proc.stdout[:200]!r} "
+            f"stderr={proc.stderr[:200]!r}"
+        ) from e
+    if proc.returncode == 2:
+        raise KeyError(payload.get("error", f"unknown resource {node_id!r}"))
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"render_resource.py failed (exit {proc.returncode}): "
+            f"{payload.get('error') or proc.stderr[:500]}"
+        )
+    return payload
 
 
 def _render_args(

@@ -7,14 +7,26 @@ import 'package:flutter/material.dart';
 /// Tiles start at normalized (x, y) coordinates from the backend's
 /// topology.py and can be dragged. Tap fires [onAgentTap]. Edges are
 /// repainted as tiles move.
-/// Imperative handle for the parent page to read the current layout.
+/// Imperative handle for the parent page to read the current layout and
+/// observe / drive the currently focused node.
 class AgentGraphController {
   AgentGraphState? _state;
+
+  /// Currently focused node id (the one the user last tapped). Null when
+  /// nothing is focused. Listen to drive sibling widgets (e.g. the input
+  /// bar that re-sorts based on which agent is selected).
+  final ValueNotifier<String?> focusedNodeId = ValueNotifier<String?>(null);
 
   /// Returns the latest node positions normalized to 0–1 by the current
   /// container size, or null if the graph hasn't been laid out yet.
   Map<String, ({double x, double y})>? snapshotNormalized() =>
       _state?.snapshotNormalized();
+
+  void clearFocus() => focusedNodeId.value = null;
+
+  void dispose() {
+    focusedNodeId.dispose();
+  }
 }
 
 class AgentGraph extends StatefulWidget {
@@ -38,9 +50,9 @@ class AgentGraph extends StatefulWidget {
 }
 
 const double _tileW = 168.0;
-const double _tileH = 78.0;
+const double _tileH = 82.0;
 const double _tileWNon = 110.0;
-const double _tileHNon = 50.0;
+const double _tileHNon = 54.0;
 const Color _bgColor = Color(0xFF34495E);
 const Color _tileColor = Color(0xFFFFF59D);
 const Color _nonAgentTileColor = Color(0xFFE0E0E0);
@@ -89,14 +101,32 @@ IconData _iconForKind(String kind) {
 class AgentGraphState extends State<AgentGraph> {
   final Map<String, Offset> _positions = {};
   Size _lastSize = Size.zero;
-  // Node id currently focused via tap. When set, resource edges connected
-  // to this node are drawn and connected nodes get a highlight border.
-  String? _focusedNodeId;
+  // Fallback focus state used when no controller is attached. With a
+  // controller, the controller's ValueNotifier is the source of truth.
+  String? _localFocusedNodeId;
+
+  String? get _focusedNodeId =>
+      widget.controller?.focusedNodeId.value ?? _localFocusedNodeId;
+
+  void _setFocus(String? id) {
+    final c = widget.controller;
+    if (c != null) {
+      // The listener registered in initState/didUpdateWidget rebuilds us.
+      c.focusedNodeId.value = id;
+    } else {
+      setState(() => _localFocusedNodeId = id);
+    }
+  }
+
+  void _onFocusChanged() {
+    if (mounted) setState(() {});
+  }
 
   @override
   void initState() {
     super.initState();
     widget.controller?._state = this;
+    widget.controller?.focusedNodeId.addListener(_onFocusChanged);
   }
 
   @override
@@ -104,13 +134,16 @@ class AgentGraphState extends State<AgentGraph> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.controller != widget.controller) {
       oldWidget.controller?._state = null;
+      oldWidget.controller?.focusedNodeId.removeListener(_onFocusChanged);
       widget.controller?._state = this;
+      widget.controller?.focusedNodeId.addListener(_onFocusChanged);
     }
   }
 
   @override
   void dispose() {
     widget.controller?._state = null;
+    widget.controller?.focusedNodeId.removeListener(_onFocusChanged);
     super.dispose();
   }
 
@@ -167,9 +200,7 @@ class AgentGraphState extends State<AgentGraph> {
         child: GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: () {
-            if (_focusedNodeId != null) {
-              setState(() => _focusedNodeId = null);
-            }
+            if (_focusedNodeId != null) _setFocus(null);
           },
           child: Stack(
             children: [
@@ -343,12 +374,11 @@ class AgentGraphState extends State<AgentGraph> {
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: () {
-          // Resource/input nodes toggle focus locally to drive the
-          // highlight overlay; LLM/code nodes still report up via the
-          // existing callback so parent pages can navigate.
-          setState(() {
-            _focusedNodeId = _focusedNodeId == id ? null : id;
-          });
+          // Toggling focus drives the in-graph highlight overlay and is
+          // also exposed via the controller for sibling widgets (input
+          // bar). LLM/code nodes still report up via onAgentTap so parent
+          // pages can navigate or open dialogs.
+          _setFocus(_focusedNodeId == id ? null : id);
           widget.onAgentTap?.call(id);
         },
         onPanUpdate: (d) {
@@ -407,10 +437,11 @@ class AgentGraphState extends State<AgentGraph> {
                   Expanded(
                     child: Padding(
                       padding: EdgeInsets.symmetric(
-                          horizontal: 8, vertical: isInput ? 2 : 4),
+                          horizontal: 8, vertical: isInput ? 2 : 3),
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         crossAxisAlignment: CrossAxisAlignment.center,
+                        mainAxisSize: MainAxisSize.min,
                         children: [
                           Row(
                             mainAxisAlignment: MainAxisAlignment.center,

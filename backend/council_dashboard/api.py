@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -237,6 +238,29 @@ def council_round(name: str, round_id: str) -> dict[str, Any]:
     return detail
 
 
+@app.get("/councils/{name}/nodes/{node_id}/rendered")
+def council_node_rendered(name: str, node_id: str) -> dict[str, Any]:
+    """Rendered body of a generated input node.
+
+    Backed by ``scripts/render_resource.py`` → ``ResourceBundle``. The
+    dashboard hits this when an input tile with ``kind: generated`` is
+    tapped so the user sees the live ``.md`` the agents actually consume.
+    """
+    try:
+        return councils_mod.render_resource(
+            settings.councils_root,
+            name,
+            node_id,
+            ml_trainer_repo=settings.ml_trainer_repo,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except KeyError as e:
+        raise HTTPException(404, str(e))
+    except RuntimeError as e:
+        raise HTTPException(500, str(e))
+
+
 @app.get("/councils/{name}/nodes/{node_id}/source")
 def council_node_source(name: str, node_id: str) -> dict[str, Any]:
     """Source views for a code node (validator/executor).
@@ -325,6 +349,30 @@ def council_clear_stop(name: str) -> dict[str, Any]:
     session_dir = _canonical_session_dir(name)
     supervisor.clear_stop(session_dir)
     return {"ok": True}
+
+
+@app.post("/councils/{name}/incomplete-rounds/delete")
+def council_delete_incomplete_rounds(name: str) -> dict[str, Any]:
+    """Trash round dirs that lack ``decision.json``.
+
+    Refuses while the runner is alive — the launcher's ``_next_round_id``
+    skips any existing dir, so a dangling round_NNN would otherwise be
+    silently abandoned on restart.
+    """
+    session_dir = _canonical_session_dir(name)
+    runner = supervisor.read_runner_state(session_dir)
+    if runner and runner.get("alive"):
+        raise HTTPException(409, "council is running; stop it first")
+    deleted: list[str] = []
+    if session_dir.exists():
+        for round_dir in sorted(d for d in session_dir.iterdir() if d.is_dir()):
+            if not round_dir.name.startswith("round_"):
+                continue
+            if (round_dir / "decision.json").exists():
+                continue
+            shutil.rmtree(round_dir)
+            deleted.append(round_dir.name)
+    return {"deleted": deleted}
 
 
 @app.post("/councils/{name}/agents/{agent_id}/preview-from-body")
