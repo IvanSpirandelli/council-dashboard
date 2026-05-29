@@ -13,6 +13,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
+# A seat-in-flight sentinel is considered ``failed`` once it has been on
+# disk for longer than this many seconds AND the supervisor isn't alive.
+# ml-trainer's chat client caps out at ~38 min (5 retries × 360s + backoff);
+# 30 min keeps a safe margin for slow but legitimate calls when the runner
+# is genuinely up, while flagging any sentinel left behind by a dead one.
+FAILED_THRESHOLD_S = 1800
+
 # Map LLM-call agent names to topology node ids. Old sessions (pre-2026-05-10)
 # recorded the critic as ``"critic"``; the manifest-driven runtime records
 # its manifest id ``"master_critic"``. Keep both forms readable.
@@ -163,12 +170,26 @@ def round_summary(round_dir: Path) -> dict[str, Any]:
             "agent": _agent_id(latest["agent"]),
             "started_at": latest.get("started_at"),
         }
+    # A seat is "failed" once its sentinel has aged past the threshold AND
+    # the supervisor isn't alive — i.e. nobody is going to finish this call.
+    # If the supervisor is alive, even an old sentinel might still complete
+    # (slow API, queued retry), so we stay quiet.
+    session_dir = round_dir.parent
+    supervisor_alive = _supervisor_alive(session_dir)
+    now = datetime.now()
+    failed_agents: list[str] = []
+    if not supervisor_alive:
+        for c in in_flight:
+            if _sentinel_age_seconds(c, now) > FAILED_THRESHOLD_S:
+                failed_agents.append(_agent_id(c["agent"]))
     promoted_count = sum(1 for c in candidates if c["promoted"])
     # Executor runs after the LLM phase: decision.json is written first,
     # then runs.jsonl is appended one entry per promoted spec.
     executor_active = has_decision and len(runs) < promoted_count
     if has_decision and not executor_active:
         status = "completed"
+    elif failed_agents:
+        status = "failed"
     else:
         status = "running"
     return {
@@ -192,6 +213,7 @@ def round_summary(round_dir: Path) -> dict[str, Any]:
         "active_agents": active_agents,
         "active_code_nodes": active_code_nodes,
         "executor_active": executor_active,
+        "failed_agents": failed_agents,
         # decider_done lets the validator say it's "done" once any decider
         # call has been recorded — the decider only runs after validator
         # finishes.
@@ -199,6 +221,30 @@ def round_summary(round_dir: Path) -> dict[str, Any]:
             slot["agent"] == "decider" for slot in per_agent.values()
         ),
     }
+
+
+def _supervisor_alive(session_dir: Path) -> bool:
+    """True iff ``.runner.json`` says ``status="running"`` AND its PID exists."""
+    runner = _read_json(session_dir / ".runner.json")
+    if not runner:
+        return False
+    if runner.get("status") != "running":
+        return False
+    pid = runner.get("pid")
+    if not isinstance(pid, int):
+        return False
+    return _pid_alive(pid)
+
+
+def _sentinel_age_seconds(sentinel: dict[str, Any], now: datetime) -> float:
+    raw = sentinel.get("started_at")
+    if not raw:
+        return 0.0
+    try:
+        started = datetime.fromisoformat(raw)
+    except (TypeError, ValueError):
+        return 0.0
+    return max((now - started).total_seconds(), 0.0)
 
 
 def _pid_alive(pid: int) -> bool:
@@ -392,6 +438,9 @@ def topology_overlay(
     promoted_count = int((chosen or {}).get("promoted_count", 0)) if chosen else 0
     executed_count = int((chosen or {}).get("executed_count", 0)) if chosen else 0
     round_status = (chosen or {}).get("status") if chosen else None
+    failed_agents: set[str] = set(
+        (chosen or {}).get("failed_agents", []) if chosen else []
+    )
 
     overlay: dict[str, dict[str, Any]] = {}
     for slot in per_agent_iter:
@@ -445,6 +494,7 @@ def topology_overlay(
             active=bool(entry.get("active")),
             calls=int(entry.get("calls", 0) or 0),
             done=bool(entry.get("done")),
+            failed=node_id in failed_agents,
         )
     return overlay
 
@@ -473,9 +523,13 @@ def _code_done(
 
 
 def _node_state(
-    kind: str, *, active: bool, calls: int, done: bool
+    kind: str, *, active: bool, calls: int, done: bool, failed: bool = False,
 ) -> str:
     """Lifecycle label the frontend renders verbatim."""
+    if failed:
+        # Failed dominates active — a stale sentinel that the supervisor
+        # can no longer service should look stuck, not working.
+        return "failed"
     if kind == "llm":
         if active:
             return "working"

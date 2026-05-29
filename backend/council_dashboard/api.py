@@ -351,6 +351,72 @@ def council_clear_stop(name: str) -> dict[str, Any]:
     return {"ok": True}
 
 
+@app.post("/councils/{name}/resume")
+def council_resume(name: str, round_id: str | None = None) -> dict[str, Any]:
+    """Sweep stale in-progress sentinels and (re)start the supervisor.
+
+    The council crash mode this targets: a round started, one or more LLM
+    seats persisted ``<agent>_t<n>.response.json`` (so the work isn't
+    lost), but the runner died before all seats finished. The leftover
+    ``.in_progress.json`` files block the dashboard from advancing and
+    make the seat look like it's still working forever.
+
+    Sweep deletes those sentinels in the chosen round (latest incomplete
+    round by default). On restart, ml-trainer's analyst runtime checks
+    for ``response.json`` per seat and skips any seat that already has
+    one — so only the missing seats hit the LLM again.
+    """
+    session_dir = _canonical_session_dir(name)
+    runner = supervisor.read_runner_state(session_dir)
+    if runner and runner.get("alive"):
+        raise HTTPException(409, "council is already running; nothing to resume")
+
+    target_round = round_id or _latest_incomplete_round(session_dir)
+    swept: list[str] = []
+    if target_round is not None:
+        swept = _sweep_stale_sentinels(session_dir, target_round)
+    try:
+        state = supervisor.start(session_dir)
+    except FileNotFoundError as e:
+        raise HTTPException(400, str(e))
+    return {
+        "resumed_round": target_round,
+        "swept_sentinels": swept,
+        "runner": state,
+    }
+
+
+def _latest_incomplete_round(session_dir: Path) -> str | None:
+    """Highest-numbered ``round_NNN`` that has no ``decision.json``."""
+    if not session_dir.is_dir():
+        return None
+    for d in sorted(
+        (p for p in session_dir.iterdir() if p.is_dir()),
+        key=lambda p: p.name,
+        reverse=True,
+    ):
+        if not d.name.startswith("round_"):
+            continue
+        if not (d / "decision.json").exists():
+            return d.name
+    return None
+
+
+def _sweep_stale_sentinels(session_dir: Path, round_id: str) -> list[str]:
+    """Delete every ``<round>/llm/*.in_progress.json`` and return the names."""
+    llm_dir = session_dir / round_id / "llm"
+    if not llm_dir.is_dir():
+        return []
+    removed: list[str] = []
+    for p in sorted(llm_dir.glob("*.in_progress.json")):
+        try:
+            p.unlink()
+        except OSError:
+            continue
+        removed.append(p.name)
+    return removed
+
+
 @app.post("/councils/{name}/incomplete-rounds/delete")
 def council_delete_incomplete_rounds(name: str) -> dict[str, Any]:
     """Trash round dirs that lack ``decision.json``.

@@ -182,6 +182,10 @@ class DashboardApi {
   Future<Map<String, dynamic>> councilClearStop(String name) =>
       _postJson(_u('/councils/$name/clear-stop'));
 
+  Future<Map<String, dynamic>> councilResume(String name, {String? roundId}) =>
+      _postJson(_u('/councils/$name/resume',
+          roundId == null ? null : {'round_id': roundId}));
+
   Future<Map<String, dynamic>> councilDeleteIncompleteRounds(String name) =>
       _postJson(_u('/councils/$name/incomplete-rounds/delete'));
 

@@ -115,6 +115,30 @@ class _CouncilRunPageState extends ConsumerState<CouncilRunPage> {
           topology: topology,
           graphController: _graphController,
           onSaveLayout: _saveLayout,
+          onResume: (roundId) async {
+            final api = ref.read(dashboardApiProvider);
+            try {
+              final res = await api.councilResume(widget.councilName,
+                  roundId: roundId);
+              ref.invalidate(councilSessionProvider(widget.councilName));
+              if (context.mounted) {
+                final swept = (res['swept_sentinels'] as List?) ?? const [];
+                final round = res['resumed_round'] ?? roundId ?? 'latest';
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                        'Resumed $round (cleared ${swept.length} stale sentinel${swept.length == 1 ? "" : "s"}).'),
+                  ),
+                );
+              }
+            } catch (e) {
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Resume failed: $e')),
+                );
+              }
+            }
+          },
           onStop: () async {
             final api = ref.read(dashboardApiProvider);
             try {
@@ -211,6 +235,7 @@ class _Body extends StatelessWidget {
     required this.topology,
     required this.graphController,
     required this.onSaveLayout,
+    required this.onResume,
     required this.onStop,
     required this.onForceStop,
     required this.onDeleteIncomplete,
@@ -221,6 +246,7 @@ class _Body extends StatelessWidget {
   final AsyncValue<Map<String, dynamic>> topology;
   final AgentGraphController graphController;
   final Future<void> Function() onSaveLayout;
+  final Future<void> Function(String? roundId) onResume;
   final Future<void> Function() onStop;
   final Future<void> Function() onForceStop;
   final Future<void> Function() onDeleteIncomplete;
@@ -298,6 +324,34 @@ class _Body extends StatelessWidget {
                       ],
                     ),
                   ),
+                if (!running)
+                  Builder(builder: (context) {
+                    final failedRoundIds = [
+                      for (final r in rounds)
+                        if ((r['status'] as String?) == 'failed')
+                          r['round_id'] as String,
+                    ];
+                    if (failedRoundIds.isEmpty) {
+                      return const SizedBox.shrink();
+                    }
+                    final latest = failedRoundIds.last;
+                    return Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: FilledButton.icon(
+                          onPressed: () => onResume(latest),
+                          icon: const Icon(Icons.play_arrow),
+                          label: Text('Resume $latest'),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: Theme.of(context).colorScheme.error,
+                            foregroundColor:
+                                Theme.of(context).colorScheme.onError,
+                          ),
+                        ),
+                      ),
+                    );
+                  }),
                 if (!running)
                   Builder(builder: (context) {
                     final incompleteIds = [

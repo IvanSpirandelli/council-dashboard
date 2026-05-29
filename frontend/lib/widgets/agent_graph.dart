@@ -516,6 +516,8 @@ class AgentGraphState extends State<AgentGraph> {
         return const Color(0xFF2196F3);
       case 'done':
         return const Color(0xFF4CAF50);
+      case 'failed':
+        return const Color(0xFFE53935);
       default:
         return const Color(0xFF757575);
     }
