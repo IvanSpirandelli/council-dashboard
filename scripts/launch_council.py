@@ -179,11 +179,15 @@ def main() -> None:
 def _next_round_id(runs_root: Path, prefix: str = "round") -> str:
     if not runs_root.exists():
         return f"{prefix}_001"
-    existing = {d.name for d in runs_root.iterdir() if d.is_dir()}
     n = 1
-    while f"{prefix}_{n:03d}" in existing:
+    while True:
+        rid = f"{prefix}_{n:03d}"
+        round_dir = runs_root / rid
+        if not round_dir.exists():
+            return rid
+        if not (round_dir / "decision.json").exists():
+            return rid  # incomplete round — resume it
         n += 1
-    return f"{prefix}_{n:03d}"
 
 
 if __name__ == "__main__":
